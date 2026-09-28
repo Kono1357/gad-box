@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#101418" />
+  <!-- 低多边形沙盘：一个俯视的等轴方块 -->
+  <polygon points="16,4 28,11 16,18 4,11" fill="#7fd06a" />
+  <polygon points="4,11 16,18 16,29 4,22" fill="#8a6a4a" />
+  <polygon points="28,11 16,18 16,29 28,22" fill="#6f5439" />
+</svg>

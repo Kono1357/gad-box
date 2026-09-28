@@ -1,0 +1,50 @@
+<!--
+  M4 第 7 批 · 内容面板 DOM 片段
+  ====================================================================
+  这个文件**不参与构建**，它只是"请把下面这些节点插进 index.html"的清单
+  （并发编辑期间 index.html 由对方持有，所以这里不直接改它）。
+
+  两个面板各需要什么：
+
+  A. `src/ui/ContentStatsUI.ts`  → `#content-stats-canvas` + `#content-stats-legend`
+     · canvas 必须**有 CSS 尺寸**（width / height）；没有尺寸时 clientWidth 是 0，
+       面板会退化成"只有图例"。所以这里用内联样式给死，和 MemoryPanel 里的图表容器同一套做法
+       —— 免得再往 style.css 里加新规则（那个文件也在被别人改）。
+     · 两个节点都可以缺：构造函数收的是 `HTMLElement | null`，缺了不抛异常，
+       只是图上不画、图例不显示。但缺了玩家就看不到这张图了，所以还是建议插上。
+
+  B. `src/ui/ContentPackUI.ts`  → `#content-pack-list`
+     · 只要一个空容器，里面 5 个包 + 3 个按钮全部由代码生成
+       （包的数量、名字、图标都来自 contentPacks.ts，写死在 HTML 里必然迟早对不上）。
+
+  插入位置：紧跟在现有的 `#memory-panel`（index.html 里那个 `<aside id="memory-panel" class="panel">`）
+  之后、`<script type="module" src="./src/main.ts">` 之前。放在侧栏里是因为这两个面板都是
+  "偶尔看一眼"的仪表盘，不该占主视口。
+-->
+
+<!-- ================= A. 内容使用统计（热力图 + 图例） ================= -->
+<!-- 结构照抄 #memory-panel：aside.panel + details>summary，折叠状态与其它面板一致 -->
+<aside id="content-stats-panel" class="panel">
+  <details open>
+    <summary>📊 内容使用统计</summary>
+
+    <!--
+      热力图。`display:block` 是必须的：inline canvas 会在底部多出几像素基线间隙，
+      而我们的绘制坐标是按 clientHeight 算的，那几像素会让最下面一行格子被裁掉一点。
+    -->
+    <canvas id="content-stats-canvas" style="width:100%;height:200px;display:block"></canvas>
+
+    <!-- 图例：分类用量前 8 行 + 覆盖率 + 未知模型的警示。内容全部由 ContentStatsUI 生成 -->
+    <div class="legend rows" id="content-stats-legend"></div>
+  </details>
+</aside>
+
+<!-- ================= B. 内容包详情（5 个开关 + 批量按钮） ================= -->
+<aside id="content-pack-panel" class="panel">
+  <details open>
+    <summary>🧩 内容包</summary>
+
+    <!-- 容器留空：包名 / 图标 / 分类 / 项数 / "开启后会多出多少" 全部由 ContentPackUI.refresh() 生成 -->
+    <div class="switches" id="content-pack-list"></div>
+  </details>
+</aside>

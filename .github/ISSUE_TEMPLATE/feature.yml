@@ -1,0 +1,31 @@
+name: ✨ 功能请求
+description: 想要一个新功能或改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 先说问题，再说方案 —— 这样我可以想出更合适的做法
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你设想的做法（可选）
+    validations:
+      required: false
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 你觉得这属于哪一类
+      options:
+        - 内容（更多模型 / 材质 / 地图）
+        - 物理与流体
+        - 界面与交互
+        - 性能
+        - 文档与发布
+        - 其它
+    validations:
+      required: true

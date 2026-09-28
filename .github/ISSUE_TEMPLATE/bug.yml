@@ -1,0 +1,54 @@
+name: 🐛 Bug 报告
+description: 报告一个可以复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！这个项目是**纯前端**的，没有后端与日志上报 ——
+        所以你提供的信息越具体，我越可能复现。页面内的「反馈」按钮会自动带上版本与浏览器信息。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你看到的实际现象（有截图更好）
+    validations:
+      required: true
+  - type: textarea
+    id: expect
+    attributes:
+      label: 你期望发生什么
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 …
+        2. 点 …
+        3. 看到 …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 页面左下角或「反馈」按钮里能看到（形如 v1.0.0）或构建时间
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 浏览器与设备
+      placeholder: Android Chrome 138 / Windows Edge 137 / iPhone Safari …
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 控制台报错（可选）
+      description: 按 F12 → Console，把红色报错整段贴进来。**生成日志**与**性能报告**也可以用面板上的导出按钮复制过来
+    validations:
+      required: false

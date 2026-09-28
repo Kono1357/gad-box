@@ -1,0 +1,50 @@
+<!--
+  M4 补充 2 · 自定义物品编辑器 DOM 片段
+  ====================================================================
+  这个文件**不参与构建**，它只是"请把下面这些节点插进 index.html"的清单
+  （并发编辑期间 index.html 由对方持有，所以这里不直接改它）。
+
+  需要什么：
+  A. `#custom-item-editor` —— 编辑器的容器。**空着就行**：名称 / 分类 / 零件行 /
+     校验问题清单 / 已保存列表 / 导入导出全都由 `src/ui/CustomItemUI.ts` 现场生成，
+     因为形状白名单来自 `CUSTOM_SHAPES`、分类来自 `BUILDING_CATEGORIES`、
+     上限来自 `CUSTOM_ITEM_LIMIT` —— 写死在 HTML 里迟早会跟真数据对不上。
+  B. `#custom-item-preview` —— 预览用的 canvas，放在容器**里面**。
+     · 它是**可选**的：没有它 CustomItemUI 会自己建一个 canvas 再挂到容器里
+       （容器里、容器后面、文档里三个位置都会找一遍，所以放在哪儿都能被认出来）。
+       既然片段里能写清楚，就写上，免得以后有人以为是漏了。
+     · 必须有 CSS 尺寸（width / height）。没有尺寸时 clientWidth 是 0，
+       预览会退回"逻辑尺寸 260×190"，在页面上看着就比例不对。
+     · 编辑器构造时会把容器清空一次（避免重复挂载叠出两份界面），
+       但**先把 canvas 抓出来**再清空、然后重新挂回编辑器里，所以这个节点与它的内联样式都活着。
+     · 容器里没有 WebGL（或者浏览器禁用 WebGL）时，这个 canvas 不会被绘制，
+       面板会**如实**在下面那行文字里写"预览不可用 + 原因"，并给出零件文字摘要。
+       这不是兜底文案，是真实行为 —— 本项目的容器里就没有 GPU。
+
+  插入位置：紧跟在 `#content-pack-panel` 之后、`<script type="module" src="./src/main.ts">` 之前。
+  放进侧栏（`<aside class="panel">`）是因为它和内容包面板一样属于"偶尔打开一次"的界面；
+  玩家正在摆东西时不该被它挤掉主视口。
+
+  ⚠ 本轮**没做**的（面板里也照样写了，免得玩家白试）：
+    不能上传模型文件；不能自定义碰撞体形状；不开放零件旋转角度；预览是固定视角、不能拖动。
+-->
+
+<aside id="custom-item-panel" class="panel">
+  <details open>
+    <summary>🧰 自定义物品</summary>
+
+    <!--
+      A + B 都放在这个容器里。
+      面板挂载点在 Engine 里是 `document.getElementById('custom-item-editor')`；
+      取不到（HTML 没接上）时构造函数收 null，面板整体不渲染但**不抛异常** ——
+      所以这个节点的缺失不会让引擎起不来，只是玩家看不到这个功能。
+    -->
+    <div id="custom-item-editor">
+      <!--
+        预览画布。width:100% + height:190px 与代码里的兜底逻辑尺寸 260×190 是同一套比例；
+        差一点没关系 —— 渲染时会按 clientWidth / clientHeight 重算相机 aspect 与画布缓冲。
+      -->
+      <canvas id="custom-item-preview" style="width:100%;height:190px;display:block"></canvas>
+    </div>
+  </details>
+</aside>

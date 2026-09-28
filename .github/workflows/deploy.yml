@@ -1,0 +1,56 @@
+# 构建 + 类型检查 + 部署到 GitHub Pages
+#
+# 为什么用 Actions 部署而不是"把 dist 提交到 gh-pages 分支"：
+# 1. 仓库里**不需要**放构建产物 —— rapier 那个 chunk 有 4.3 MB，
+#    每次改一行代码就重新提交一遍二进制，仓库会迅速膨胀；
+# 2. base 路径由 `GITHUB_REPOSITORY` 自动推导（见 vite.config.ts），
+#    所以**仓库改名不用改代码**；
+# 3. `npm run typecheck` 与构建在同一次运行里，坏了会直接红，不会被部署出去。
+name: 构建与部署 Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署；新的推送会取消旧的（避免"旧构建覆盖新构建"）
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖（用 lockfile，保证可复现）
+        run: npm ci
+      - name: 类型检查
+        run: npm run typecheck
+      - name: 构建
+        run: npm run build
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署
+        id: deployment
+        uses: actions/deploy-pages@v4

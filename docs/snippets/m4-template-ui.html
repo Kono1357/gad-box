@@ -1,0 +1,46 @@
+<!--
+  M4 地图模板面板（补充 4：生成预览 + 补充 5：回滚入口）
+  ─────────────────────────────────────────────────────────────
+  用法：把下面这一段粘进 index.html 的「生成」面板里（不要改 index.html 的其它部分）。
+  面板内部的所有节点（卡片 / 滑杆 / 种子输入 / 按钮 / 限制清单）都由
+  `src/ui/MapTemplateUI.ts` 的构造函数创建，所以这里**只需要一个挂载点**——
+  契约越少，index.html 与 TypeScript 越不容易对不上（面板缺节点只会抛中文错误，
+  不会静默地少画一块）。
+
+  插在哪：index.html 里「生成」相关的面板容器内（与 #catalog-* / #memp-* 那些面板同级），
+  建议放在世界尺寸选择器下面、生成进度条上面。示例位置：
+
+      <section id="panel-generate">
+        ...世界尺寸选择...
+        <!-- 👇 这一段就是本文件的内容 👇 -->
+        <div id="map-template-panel"></div>
+        ...生成按钮 / 进度条...
+      </section>
+
+  样式：面板自己用内联样式排布（与 src/perf/MemoryPanel.ts 同样的做法），
+  所以**不需要**在 src/style.css 里加规则，也不会和别的面板的选择器打架。
+  想微调的话，给 #map-template-panel 加一条规则即可（例如宽度与最大高度）。
+-->
+<div id="map-template-panel" class="panel-section" aria-label="地图模板与生成预览">
+  <!--
+    这里不需要任何子节点：内容由 MapTemplateUI 生成。
+    如果真的想加静态节点，请在 src/ui/MapTemplateUI.ts 里按「可选节点」的方式处理
+    （`querySelector` 而不是 `must()`），否则 HTML 少一行就会让整个面板打不开。
+  -->
+</div>
+
+<!--
+  可选：一块「大预览」画布。
+  MapTemplateUI 自己**不需要**它（卡片上的缩略图是面板自己建的 canvas）；
+  它是给 Engine 的 onPreview 回调用的 —— 玩家点「预览」时把当前参数的近似预览画在这里，
+  比缩略图大得多，能看清地形。想用就把下面这三行一起粘上，Engine 里按 id 取：
+
+      const canvas = document.getElementById('map-template-preview') as HTMLCanvasElement | null;
+      if (canvas) renderPreviewCanvas(canvas, buildPreview({ ...req, resolution: 128 }));
+
+  不想要大预览就整块删掉，面板一切照常（缩略图仍然在卡片里）。
+-->
+<!--
+<canvas id="map-template-preview" style="width:100%;max-width:320px;aspect-ratio:1/1;background:#0e1418;border-radius:6px;"></canvas>
+<small style="opacity:.7">大预览同样是「近似预览」：降采样 + 高度场，不是真实生成的体素。</small>
+-->

@@ -1,0 +1,9 @@
+# 引导用户先看文档与讨论区，减少"其实文档里写了"的重复 Issue
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 使用说明（USER_GUIDE）
+    url: https://github.com/Kono1357/gad-box/blob/main/docs/USER_GUIDE.md
+    about: 操作方式、工具、快捷键、常见问题
+  - name: 💬 讨论区
+    url: https://github.com/Kono1357/gad-box/discussions
+    about: 想法、玩法分享、提问（不是 bug）

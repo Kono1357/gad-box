@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#101418" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>上帝沙盘模拟器 · God Sandbox M1.5</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewport"></canvas>
+
+      <!-- ================= 顶部工具栏 ================= -->
+      <header id="topbar">
+        <div class="brand">
+          <span class="dot"></span>
+          <span class="name">上帝沙盘</span>
+          <span class="tag">M1.5</span>
+        </div>
+
+        <div class="group" id="main-toolbar" role="group" aria-label="主工具栏">
+          <button type="button" data-action="menu" title="主菜单 / 参考地图（M）">☰ 地图</button>
+          <button type="button" data-action="shortcuts" title="快捷键提示（? / F1）">⌨</button>
+          <span class="sep"></span>
+          <button type="button" data-action="combo" id="btn-combo-panel" title="20 个物理组合（K）">🎛 组合</button>
+          <button type="button" data-action="tutorial" id="btn-tutorial" title="教学关卡（J）">🎓 教学</button>
+          <button type="button" data-action="physics-debug" title="物理框架面板（F2）">⚙️ 物理</button>
+          <button type="button" data-action="sandbox" title="物理沙盘模式切换">🧪</button>
+          <span class="sep"></span>
+          <button type="button" data-action="undo" id="btn-undo" title="Ctrl+Z">↶</button>
+          <button type="button" data-action="redo" id="btn-redo" title="Ctrl+Y">↷</button>
+          <span class="sep"></span>
+          <button type="button" data-tool="terrain" id="btn-tool-terrain" class="active" title="地形笔刷工具">🖌 地形</button>
+          <button type="button" data-tool="building" id="btn-tool-building" title="建筑放置工具（2）">🏠 建筑</button>
+          <button type="button" data-tool="select" id="btn-tool-select" title="选择与拿起工具（3）">🖱 选择</button>
+          <button type="button" data-tool="fluid" id="btn-tool-fluid" title="流体工具（4）：泼水 / 抽水 / 加水 / 减水 / 冻结">💧 流体</button>
+          <button type="button" data-tool="sand" id="btn-tool-sand" title="沙土工具（5）：堆沙 / 挖沙 / 湿沙 / 干沙 / 凝固">🏖 沙土</button>
+          <span class="sep"></span>
+          <button type="button" data-mode="edit" id="btn-mode-edit" class="active" title="编辑模式：左键画地形">编辑</button>
+          <button type="button" data-mode="view" id="btn-mode-view" title="观察模式：左键转视角">观察</button>
+          <span class="sep"></span>
+          <button type="button" data-action="save" title="保存到浏览器（Ctrl+S）">💾</button>
+          <button type="button" data-action="load" title="读取本地存档">📂</button>
+          <button type="button" data-action="export" title="导出 JSON 文件">⬇</button>
+          <button type="button" data-action="import" title="导入 JSON 文件">⬆</button>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="group" id="time-controls" role="group" aria-label="时间控制">
+          <button type="button" data-action="step" title="单步前进 1/60 秒">⏭</button>
+          <button type="button" data-action="pause" id="btn-pause" title="暂停 / 播放">⏸</button>
+          <button type="button" data-scale="0.25" title="0.25 倍速（极慢，看碰撞细节）">¼×</button>
+          <button type="button" data-scale="0.5" title="0.5 倍速（慢速观察）">½×</button>
+          <button type="button" data-scale="1" title="1 倍速">1×</button>
+          <button type="button" data-scale="2" title="2 倍速">2×</button>
+          <button type="button" data-scale="4" title="4 倍速">4×</button>
+          <span class="sep"></span>
+          <button type="button" data-action="rewind" id="btn-rewind" title="回溯一帧（R，Shift+R 前进）">⏪</button>
+          <button type="button" data-action="snapshot" id="btn-snapshot" title="保存一个关键帧快照">📸</button>
+        </div>
+      </header>
+
+      <input id="file-input" type="file" accept=".json,application/json" />
+
+      <!-- ================= 左侧：笔刷面板 ================= -->
+      <aside id="brush-panel" class="panel">
+        <details open>
+          <summary>🖌 笔刷</summary>
+
+          <h4>模式（1~9 键快捷切换）</h4>
+          <div class="button-grid cols-2" id="brush-modes"></div>
+
+          <h4>形状（[ ] 键切换）</h4>
+          <div class="button-grid cols-3" id="brush-shapes"></div>
+
+          <label class="slider">
+            <span>半径 <b id="radius-value">3.0</b>（Alt+滚轮）</span>
+            <input type="range" id="radius-slider" min="0.5" max="16" step="0.5" value="3" />
+          </label>
+
+          <label class="slider">
+            <span>强度 <b id="strength-value">0.50</b>（Ctrl+滚轮）</span>
+            <input type="range" id="strength-slider" min="0.1" max="1" step="0.05" value="0.5" />
+          </label>
+
+          <label class="slider">
+            <span>密度 <b id="density-value">0.60</b></span>
+            <input type="range" id="density-slider" min="0" max="1" step="0.05" value="0.6" />
+          </label>
+
+          <h4>衰减</h4>
+          <div class="button-grid cols-4" id="brush-falloffs"></div>
+
+          <h4>作用方向</h4>
+          <div class="button-grid cols-4" id="brush-directions"></div>
+
+          <h4>材质</h4>
+          <div class="material-grid" id="material-grid"></div>
+
+          <p class="brush-summary" id="brush-summary">—</p>
+        </details>
+      </aside>
+
+      <!-- ================= 右侧：建筑面板 + 性能面板（同一列，可一起滚动） ================= -->
+      <div id="right-stack">
+      <aside id="building-panel" class="panel">
+        <details open>
+          <summary>🏠 建筑模型库</summary>
+
+          <!-- M4 第 2 批：物品面板重写。浏览区由 CatalogPanel 接管（新的 #catalog-* 节点）。
+               ── M4.1 重排（用户反馈"选东西步骤太多、看不到全部物品"）──
+               原来的顺序是：搜索 → 分类 → 二级分类 → 排序/收藏 → 最近使用 → 内容包
+               → **然后才是物品**。手机上要滚过大半屏才知道自己有哪些东西可选，
+               这一条就是"步骤太多"的来源。
+               现在改成"要用的东西在最上面"：
+                 搜索 → 分类 → **物品列表** → 还有多少
+               而排序 / 只看收藏 / 最近使用 / 内容包这些**偶尔调一次**的，收进折叠块。
+               id 一个都没改，所以 CatalogPanel 的绑定逻辑完全不受影响。 -->
+          <input
+            type="search"
+            id="catalog-search"
+            placeholder="搜索：石墙 / 桌 / 船 / 杯子 …（空格分词，支持标签）"
+            autocomplete="off"
+          />
+          <!-- 最近使用：直接放在搜索框下面，让"再放一个刚才用过的东西"只要一次点击。
+               空的时候整行隐藏（由 CatalogPanel 控制 #catalog-recent-wrap），不占地方 -->
+          <div id="catalog-recent-wrap" hidden>
+            <span class="inline-label dim">最近：</span>
+            <div class="chip-list" id="catalog-recent"><span class="dim">还没有用过的物品</span></div>
+          </div>
+          <div class="tab-row" id="catalog-tabs"></div>
+          <!-- 二级分类：默认收起（只有非「全部」分类下才有内容），避免多一排要点的小按钮 -->
+          <div class="chip-list" id="catalog-subs"></div>
+
+          <p class="inline-label" id="catalog-count">—</p>
+          <div class="item-grid" id="catalog-grid"></div>
+          <p class="inline-label dim" id="catalog-empty"></p>
+          <div class="pager" id="catalog-pager"></div>
+
+          <details>
+            <summary>筛选与排序</summary>
+            <div class="row">
+              <label class="mini">排序
+                <select id="catalog-sort">
+                  <option value="default" selected>默认</option>
+                  <option value="name">名称</option>
+                  <option value="mass">质量</option>
+                  <option value="size">尺寸</option>
+                </select>
+              </label>
+              <label class="mini"><input type="checkbox" id="catalog-fav-only" /> 只看收藏</label>
+            </div>
+          </details>
+
+          <details>
+            <summary>内容包</summary>
+            <div class="switches compact" id="catalog-packs"></div>
+            <p class="inline-label dim" id="catalog-pack-note">关掉一个内容包只会把它从面板里藏起来，<b>世界里的东西不会消失</b>。</p>
+          </details>
+
+          <div class="detail-box" id="building-detail">从上面选一个模型，然后在场景里点地面放置。</div>
+          <div class="detail-box" id="catalog-hover">把鼠标停在物品上可以看到它的完整参数。</div>
+
+          <h4>放置设置</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="build-snap" checked /> 网格吸附</label>
+            <label><input type="checkbox" id="build-ground" checked /> 自动贴地</label>
+          </div>
+          <div class="row">
+            <label class="mini">吸附
+              <select id="build-snapstep">
+                <option value="0.5">0.5 m</option>
+                <option value="1" selected>1 m</option>
+                <option value="2">2 m</option>
+                <option value="4">4 m</option>
+              </select>
+            </label>
+            <label class="mini">旋转
+              <select id="build-rotstep">
+                <option value="90" selected>90°</option>
+                <option value="45">45°</option>
+                <option value="15">15°</option>
+                <option value="5">5°</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="button-grid cols-3" id="build-actions">
+            <button type="button" data-build-action="rotate-left" title="Q：逆时针">⟲ 旋转</button>
+            <button type="button" data-build-action="rotate-right" title="E：顺时针">⟳ 旋转</button>
+            <button type="button" data-build-action="delete" title="Delete：删除选中">🗑 删除</button>
+            <button type="button" data-build-action="duplicate" title="Ctrl+D：复制选中">⧉ 复制</button>
+            <button type="button" data-build-action="focus" title="F：镜头对准">🎯 对准</button>
+            <button type="button" data-build-action="none" hidden></button>
+          </div>
+
+          <p class="inline-label" id="placement-label">未选择建筑模型</p>
+          <p class="inline-label dim" id="building-count">世界内建筑：0</p>
+          <p class="inline-label dim" id="support-label">支撑检查未开启</p>
+        </details>
+      </aside>
+
+      <!-- ================= 智能放置 ================= -->
+      <aside id="placement-panel" class="panel">
+        <details open>
+          <summary>✨ 智能放置</summary>
+
+          <div class="switches compact">
+            <label><input type="checkbox" id="placement-auto" checked /> 自动推荐位置</label>
+            <label><input type="checkbox" id="placement-physics" checked /> 放在空中会下坠</label>
+            <label><input type="checkbox" id="placement-track-camera" checked /> 候选点跳远时镜头跟随（0.3 秒平滑）</label>
+            <label><input type="checkbox" id="placement-edge-arrow" checked /> 候选点在视野外时显示边缘箭头</label>
+            <label><input type="checkbox" id="placement-highlight" checked /> 脉冲高亮框（穿透地形可见）</label>
+          </div>
+
+          <div class="button-grid cols-3">
+            <button type="button" id="btn-placement-prev" title="[ 键">◀ 候选</button>
+            <button type="button" id="btn-placement-next" title="Tab 键 / ] 键">候选 ▶</button>
+            <button type="button" id="btn-placement-refresh" title="重新计算">↻</button>
+          </div>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-placement-confirm" class="primary">✓ 确认放置（回车）</button>
+            <button type="button" id="btn-placement-cancel">✕ 取消（Esc）</button>
+          </div>
+
+          <p class="inline-label" id="placement-status">选中一个模型后自动推荐落点</p>
+          <p class="inline-label dim" id="placement-camera-note">镜头跟随只在候选点「跳远」时介入（切候选、换目标），正常瞄准时不动镜头。</p>
+          <div class="candidate-list" id="placement-candidates"></div>
+
+          <h4>堆叠与支撑</h4>
+          <dl class="stats">
+            <dt>当前落点支撑</dt><dd id="stack-support">—</dd>
+            <dt>稳定性</dt><dd id="stack-stability">—</dd>
+            <dt>堆叠层数</dt><dd id="stack-layer">0</dd>
+            <dt>接触面积比</dt><dd id="stack-contact">0%</dd>
+          </dl>
+
+          <h4>智能吸附</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="snap-anchors" checked /> 吸附点对齐</label>
+            <label><input type="checkbox" id="snap-surface" checked /> 吸附到支撑面</label>
+            <label><input type="checkbox" id="snap-wall" checked /> 贴墙对齐</label>
+          </div>
+        </details>
+      </aside>
+
+
+      <!-- ================= 堆叠（问题 1 / 问题 2） ================= -->
+      <aside id="stacking-panel" class="panel">
+        <details open>
+          <summary>🧱 堆叠</summary>
+
+          <dl class="stats">
+            <dt>层数</dt><dd id="stk-layer">—</dd>
+            <dt>支撑物</dt><dd id="stk-support">—</dd>
+            <dt>支撑面面积</dt><dd id="stk-support-area">0 m²</dd>
+            <dt>已占用</dt><dd id="stk-used-area">0 m²</dd>
+            <dt>剩余可用</dt><dd id="stk-free-area">0 m²</dd>
+            <dt>接触比例</dt><dd id="stk-contact">0%</dd>
+            <dt>稳定性</dt><dd id="stk-stability">—</dd>
+            <dt>总高度</dt><dd id="stk-height">0 m</dd>
+            <dt>还能放</dt><dd id="stk-remaining">—</dd>
+          </dl>
+
+          <p class="inline-label warn" id="stk-warning"></p>
+
+          <h4>堆叠方向（默认向上叠罗汉）</h4>
+          <div class="button-grid cols-3">
+            <button type="button" data-axis="y" title="一层一层往上叠">↑ Y 叠高</button>
+            <button type="button" data-axis="x" title="沿 X 轴排成一堵墙">→ X 排列</button>
+            <button type="button" data-axis="z" title="沿 Z 轴排成一堵墙">→ Z 排列</button>
+          </div>
+
+          <h4>支撑面小网格 <b id="stk-surface-grid-value">4 × 4</b></h4>
+          <input type="range" id="stk-surface-grid" min="2" max="8" step="1" value="4" />
+          <p class="inline-label dim">格子越细，桌面上能摆的位置越多、越整齐。</p>
+
+          <h4>连续堆叠（按住 Shift 放置）</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="stk-quick-stack" checked /> 放下后继续叠同一个模型</label>
+          </div>
+          <div class="row">
+            <label class="mini">撤销粒度
+              <select id="stk-quick-undo">
+                <option value="merge" selected>整轮合并成一步</option>
+                <option value="each">每放一个算一步</option>
+              </select>
+            </label>
+          </div>
+          <button type="button" id="stk-quick-stop" class="wide" disabled>停止连续堆叠（Esc）</button>
+          <p class="inline-label dim" id="stk-quick-count">连续堆叠未启用</p>
+        </details>
+      </aside>
+
+      <!-- ================= 支撑调试（补充 1） ================= -->
+      <aside id="support-debug-panel" class="panel">
+        <details>
+          <summary>🔍 支撑调试</summary>
+
+          <dl class="stats">
+            <dt>选中物体</dt><dd id="sd-object">—</dd>
+            <dt>层数</dt><dd id="sd-layer">—</dd>
+            <dt>支撑物</dt><dd id="sd-support">—</dd>
+            <dt>支撑面面积</dt><dd id="sd-area">0 m²</dd>
+            <dt>已占用</dt><dd id="sd-used">0 m²</dd>
+            <dt>剩余</dt><dd id="sd-free">0 m²</dd>
+            <dt>接触比例</dt><dd id="sd-contact">0%</dd>
+            <dt>稳定性</dt><dd id="sd-stability">—</dd>
+            <dt>全场统计</dt><dd id="sd-counts">—</dd>
+            <dt>索引耗时</dt><dd id="sd-timing">—</dd>
+          </dl>
+
+          <h4>这个支撑面上已放置的物体</h4>
+          <ul class="slot-list" id="sd-slot-list"></ul>
+
+          <h4>可视化开关</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="sd-overlay" checked /> 支撑面与占用格子</label>
+            <label><input type="checkbox" id="sd-stability-colors" checked /> 稳定性着色（绿/黄/红）</label>
+          </div>
+        </details>
+      </aside>
+
+      <!-- ================= 选择与微调 ================= -->
+      <aside id="selection-panel" class="panel">
+        <details open>
+          <summary>🖱 选择与拿起</summary>
+
+          <div class="button-grid cols-3">
+            <button type="button" id="btn-select-all">全选</button>
+            <button type="button" id="btn-select-clear">清空</button>
+            <button type="button" id="btn-select-similar">选同类</button>
+          </div>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-pickup-one">✋ 拿起单个</button>
+            <button type="button" id="btn-pickup-structure">🏗 拿起整结构</button>
+          </div>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-drop">⤓ 放下</button>
+            <button type="button" id="btn-restore" title="Esc">↺ 还原原位</button>
+          </div>
+
+          <p class="inline-label" id="selection-info">未选中任何物体</p>
+
+          <h4>微调位置（米）</h4>
+          <div class="row">
+            <label class="mini">步长
+              <select id="nudge-step">
+                <option value="0.25">0.25</option>
+                <option value="0.5" selected>0.5</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
+            <label class="mini">旋转
+              <select id="fine-rotstep">
+                <option value="5" selected>5°</option>
+                <option value="15">15°</option>
+                <option value="45">45°</option>
+                <option value="90">90°</option>
+              </select>
+            </label>
+          </div>
+          <div class="button-grid cols-3">
+            <button type="button" data-nudge="x-">← X</button>
+            <button type="button" data-nudge="x+">X →</button>
+            <button type="button" data-nudge="y+">↑ Y</button>
+            <button type="button" data-nudge="y-">Y ↓</button>
+            <button type="button" data-nudge="z-">← Z</button>
+            <button type="button" data-nudge="z+">Z →</button>
+          </div>
+
+          <h4>微调角度</h4>
+          <div class="button-grid cols-3">
+            <button type="button" data-fine-rot="x-">X −</button>
+            <button type="button" data-fine-rot="x+">X +</button>
+            <button type="button" data-fine-rot="y-">Y −</button>
+            <button type="button" data-fine-rot="y+">Y +</button>
+            <button type="button" data-fine-rot="z-">Z −</button>
+            <button type="button" data-fine-rot="z+">Z +</button>
+          </div>
+
+          <h4>镜像复制</h4>
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-mirror-x">⇋ 沿 X 镜像</button>
+            <button type="button" id="btn-mirror-z">⇅ 沿 Z 镜像</button>
+          </div>
+        </details>
+      </aside>
+
+      <!-- ================= 分组 / 预制件 / 蓝图 ================= -->
+      <aside id="prefab-panel" class="panel">
+        <details>
+          <summary>🧩 分组 · 预制件 · 蓝图</summary>
+
+          <h4>分组</h4>
+          <div class="button-grid cols-3">
+            <button type="button" id="btn-group-create">成组</button>
+            <button type="button" id="btn-group-ungroup">解散</button>
+            <button type="button" id="btn-group-select">选中组</button>
+          </div>
+          <input type="text" id="group-name" placeholder="组名（可空）" />
+          <div class="chip-list" id="group-list"></div>
+
+          <h4>预制件</h4>
+          <div class="button-grid cols-3">
+            <button type="button" id="btn-prefab-save">保存选中</button>
+            <button type="button" id="btn-prefab-place">放置</button>
+            <button type="button" id="btn-prefab-delete">删除</button>
+          </div>
+          <div class="prefab-list" id="prefab-list"></div>
+
+          <h4>蓝图</h4>
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-blueprint-export">⬇ 导出选中</button>
+            <button type="button" id="btn-blueprint-import">⬆ 导入蓝图</button>
+          </div>
+          <input id="blueprint-input" type="file" accept=".json,application/json" />
+          <p class="inline-label dim" id="blueprint-status">蓝图为纯 JSON，可以互相分享</p>
+        </details>
+      </aside>
+
+      <!-- ================= 历史面板 ================= -->
+      <aside id="history-panel" class="panel">
+        <details>
+          <summary>🕘 操作历史</summary>
+
+          <dl class="stats">
+            <dt>可撤销</dt><dd id="history-undo-count">0</dd>
+            <dt>可重做</dt><dd id="history-redo-count">0</dd>
+            <dt>当前步骤</dt><dd id="history-cursor">0 / 0</dd>
+          </dl>
+
+          <div class="button-grid cols-3">
+            <button type="button" id="btn-history-undo">↶ 撤销</button>
+            <button type="button" id="btn-history-redo">↷ 重做</button>
+            <button type="button" id="btn-history-clear">清空</button>
+          </div>
+
+          <p class="inline-label dim" id="history-hint">点列表里的任意一步可以直接回退到那一步</p>
+          <div class="history-list" id="history-list"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 性能与调试面板 ================= -->
+      <aside id="debug-panel" class="panel">
+        <details open>
+          <summary>📊 性能与调试</summary>
+
+          <dl class="stats">
+            <dt>FPS</dt><dd id="pf-fps">--</dd>
+            <dt>帧耗时</dt><dd id="pf-frame">--</dd>
+            <dt>Draw Call</dt><dd id="pf-draws">0</dd>
+            <dt>三角形</dt><dd id="pf-tris">0</dd>
+            <dt>体素</dt><dd id="pf-voxels">0</dd>
+            <dt>水格</dt><dd id="pf-water">0</dd>
+            <dt>区块 总/可见</dt><dd id="pf-chunks">0 / 0</dd>
+            <dt>已建网格</dt><dd id="pf-meshed">0</dd>
+            <dt>待重建</dt><dd id="pf-dirty">0</dd>
+            <dt>可见区块</dt><dd id="pf-visible">0</dd>
+            <dt>编辑耗时</dt><dd id="pf-edit">0 ms</dd>
+            <dt>网格耗时</dt><dd id="pf-mesh">0 ms</dd>
+            <dt>模拟活跃格</dt><dd id="pf-sim">水 0 / 沙 0</dd>
+            <dt>撤销/重做</dt><dd id="pf-history">0 / 0</dd>
+            <dt>存档</dt><dd id="pf-save">—</dd>
+            <dt>渲染器</dt><dd id="pf-renderer">—</dd>
+            <dt>物理体</dt><dd id="pf-physics">0</dd>
+            <dt>建筑数</dt><dd id="pf-buildings">0</dd>
+            <dt>渲染距离</dt><dd id="pf-render-distance">—</dd>
+            <dt>自适应档位</dt><dd id="pf-adaptive">—</dd>
+            <dt>质量预设</dt><dd id="pf-quality">—</dd>
+            <dt>支撑面索引</dt><dd id="pf-stacking">—</dd>
+          </dl>
+
+          <h4>一键画质（补充 5）</h4>
+          <div class="button-grid cols-3" id="quality-presets">
+            <button type="button" data-quality="performance">性能优先</button>
+            <button type="button" data-quality="balanced">均衡</button>
+            <button type="button" data-quality="quality">画质优先</button>
+          </div>
+          <div class="switches compact">
+            <label><input type="checkbox" id="pf-adaptive-toggle" checked /> 帧率低时自动降级</label>
+          </div>
+          <p class="inline-label dim" id="pf-quality-note">新手地图默认「性能优先」，目标 90 FPS 以上。</p>
+
+          <h4>显示开关</h4>
+          <div class="switches" id="debug-switches">
+            <label><input type="checkbox" data-debug="chunkBorders" /> 区块边界</label>
+            <label><input type="checkbox" data-debug="wireframe" /> 地形线框</label>
+            <label><input type="checkbox" data-debug="brushCursor" checked /> 笔刷范围</label>
+            <label><input type="checkbox" data-debug="debugGrids" /> 地面网格</label>
+            <label><input type="checkbox" data-debug="props" /> M0 占位道具</label>
+            <label><input type="checkbox" data-debug="frustumCulling" checked /> 视锥剔除</label>
+            <label><input type="checkbox" data-debug="colorLegend" /> 颜色图例</label>
+            <label><input type="checkbox" data-debug="autoSave" checked /> 自动保存</label>
+            <label><input type="checkbox" data-debug="confirmWorldSwitch" checked /> 换地图前先确认</label>
+          </div>
+
+          <h4>物理规则（可单独开关）</h4>
+          <div class="switches" id="physics-switches">
+            <label><input type="checkbox" data-physics="waterEnabled" checked /> 水流动（重力+容器）</label>
+            <label><input type="checkbox" data-physics="sandEnabled" checked /> 沙滑落（安息角）</label>
+            <label><input type="checkbox" data-physics="supportEnabled" /> 支撑检查（失去支撑会掉落）</label>
+          </div>
+
+          <label class="slider">
+            <span>水速 <b id="water-speed-value">0.50</b></span>
+            <input type="range" id="water-speed" min="0.05" max="1" step="0.05" value="0.5" />
+          </label>
+          <label class="slider">
+            <span>水扩散方向 <b id="water-dispersion-value">4</b></span>
+            <input type="range" id="water-dispersion" min="1" max="4" step="1" value="4" />
+          </label>
+          <label class="slider">
+            <span>沙安息角 <b id="sand-angle-value">34°</b></span>
+            <input type="range" id="sand-angle" min="10" max="60" step="1" value="34" />
+          </label>
+          <label class="slider">
+            <span>允许悬挑 <b id="support-cantilever-value">4 米</b></span>
+            <input type="range" id="support-cantilever" min="1" max="12" step="0.5" value="4" />
+          </label>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-check-support">检查支撑</button>
+            <button type="button" id="btn-rebuild-all">重建全部网格</button>
+          </div>
+
+          <h4>资源与内存（补充 4）</h4>
+          <dl class="stats">
+            <dt>JS 堆</dt><dd id="rm-heap">—</dd>
+            <dt>堆上限</dt><dd id="rm-heap-limit">—</dd>
+            <dt>几何 / 贴图</dt><dd id="rm-gpu">0 / 0</dd>
+            <dt>显存粗估</dt><dd id="rm-gpu-mb">0 MB</dd>
+            <dt>体素数据</dt><dd id="rm-voxel-mb">0 MB</dd>
+            <dt>物理体 / 关节</dt><dd id="rm-physics">0 / 0</dd>
+          </dl>
+          <p class="inline-label dim" id="rm-summary">暂无采样</p>
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-collect-garbage">回收内存（尽力而为）</button>
+            <button type="button" id="btn-log-resources">打印资源清单</button>
+          </div>
+          <p class="inline-label dim" id="rm-gc-note">—</p>
+          <p class="inline-label dim">
+            说明：JS 堆只有 Chromium 内核浏览器能读到（其余显示「不可用」）；显存是从几何与贴图数量粗估的；
+            体素数据按 Uint8Array 实际字节算，这个数才是准的。
+          </p>
+
+          <h4>换图记录（最近 12 次）</h4>
+          <div class="legend rows" id="rm-switch-log"></div>
+
+          <h4>上次地图生成报告（问题 3.5）</h4>
+          <div class="legend rows" id="rm-map-report"></div>
+
+          <h4>颜色图例</h4>
+          <div class="legend" id="color-legend"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 内存与帧分析（M4 第 6 批） ================= -->
+      <aside id="memory-panel" class="panel">
+        <details open>
+          <summary>🧠 内存与帧分析</summary>
+
+          <dl class="stats">
+            <dt>FPS</dt><dd id="memp-fps">--</dd>
+            <dt>帧耗时</dt><dd id="memp-frame">--</dd>
+            <dt>Draw Call</dt><dd id="memp-draws">0</dd>
+            <dt>三角形</dt><dd id="memp-tris">0</dd>
+            <dt>物理耗时</dt><dd id="memp-physics">0 ms</dd>
+            <dt>GC 次数</dt><dd id="memp-gc">0（近似）</dd>
+            <dt>JS 堆</dt><dd id="memp-heap">不可用</dd>
+            <dt>显存粗估</dt><dd id="memp-gpu">0 MB</dd>
+            <dt>几何 / 贴图</dt><dd id="memp-geo">0 / <span id="memp-tex">0</span></dd>
+            <dt>材质</dt><dd id="memp-mat">未统计</dd>
+          </dl>
+
+          <h4>帧时间分布（最近 120 帧）</h4>
+          <dl class="stats">
+            <dt>中位数</dt><dd id="memp-median">--</dd>
+            <dt>P95</dt><dd id="memp-p95">--</dd>
+            <dt>P99</dt><dd id="memp-p99">--</dd>
+            <dt>慢帧占比</dt><dd id="memp-slow-ratio">0%</dd>
+          </dl>
+          <div class="bar" style="height: 56px"><div id="memp-histogram" style="display:flex;align-items:flex-end;gap:2px;height:100%"></div></div>
+          <p class="inline-label dim">柱越高 = 落在该耗时区间的帧越多。红柱表示这一档已经超预算。</p>
+          <h4>最近帧折线</h4>
+          <div style="display:flex;align-items:flex-end;gap:1px;height:36px" id="memp-sparkline"></div>
+          <p class="inline-label dim">每根 1px 表示一帧，越高越慢；超预算的帧标红。</p>
+
+          <h4>最慢的帧</h4>
+          <div class="legend rows" id="memp-slowest"></div>
+          <h4>慢帧记录</h4>
+          <p class="inline-label dim">共 <b id="memp-slow-total">0</b> 条（同一原因会合并计数）</p>
+          <div class="legend rows" id="memp-slow-list"></div>
+          <label class="slider">
+            <span>慢帧阈值 <b id="memp-threshold-value">16.7 ms</b></span>
+            <input type="range" id="memp-threshold" min="8" max="60" step="0.5" value="16.7" />
+          </label>
+
+          <h4>瓶颈判断</h4>
+          <p class="inline-label" id="memp-diagnosis">暂无判断（先跑一会儿）</p>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="memp-collect-gc">回收内存</button>
+            <button type="button" id="memp-export">导出性能报告</button>
+          </div>
+          <button type="button" id="memp-clear-slow" class="wide">清空慢帧记录</button>
+          <p class="inline-label dim" id="memp-gc-note">—</p>
+        </details>
+      </aside>
+
+      <!-- ================= 压力测试与性能（M4 第二部分 · 第 7 批） ================= -->
+      <!-- ⚠ id 不能叫 stress-panel：M3 的「🌡 应力」面板已经占用了那个 id，
+           而 StressPanel.ts 用 must('#stress-panel') 找它 —— 重名会让"应力开关"
+           作用到这张面板上（子代理在写断言时顺手查出来的真 bug）。 -->
+      <aside id="stress-test-panel" class="panel">
+        <details open>
+          <summary>📈 压力测试与热力图</summary>
+
+          <p class="inline-label dim">
+            10 个场景：10000 粒子水池 / 5000 粒子瀑布 / 大型沙崩 / 1000 箱子堆叠 / 100 门同开 /
+            50 吊桥同放 / 船在水中 / 洪水冲建筑 / 大型城市 / 综合测试。
+            移动端会按档位降级（粒子 ≤3000），降级后目标帧率也随之变化。
+          </p>
+          <div class="button-grid cols-2" id="stress-scenes"></div>
+
+          <h4>当前场景指标</h4>
+          <p class="inline-label" id="stress-summary">还没有跑过压力测试场景</p>
+          <p class="inline-label dim" id="stress-verdict">还没有生成报告（先跑一个场景）</p>
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-stress-report">生成报告（含对比）</button>
+            <button type="button" id="btn-stress-export">导出 JSON 报告</button>
+          </div>
+
+          <h4>负载热力图</h4>
+          <canvas id="perf-heatmap" style="width:100%;height:200px;display:block"></canvas>
+          <p class="inline-label dim" id="perf-heatmap-legend">
+            这是一张<b>负载估计</b>图（物件密度），不是每帧实际耗时 —— 浏览器不暴露逐区域的耗时。
+          </p>
+
+          <h4>帧录制</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="perf-record-toggle" /> 开始录制帧数据（最多 3600 帧）</label>
+          </div>
+          <div class="button-grid cols-2">
+            <button type="button" id="btn-record-json">导出录制 JSON</button>
+            <button type="button" id="btn-record-csv">导出录制 CSV</button>
+          </div>
+          <p class="inline-label dim" id="perf-record-note">没有在录制。录制时每帧会记下帧耗时与各阶段拆解。</p>
+        </details>
+      </aside>
+
+      <!-- ================= 沙土（M4 第二部分 · 第 3 批） ================= -->
+      <aside id="sand-panel" class="panel collapsed">
+        <details open>
+          <summary>🏖 沙土</summary>
+
+          <dl class="stats">
+            <dt>沙格</dt><dd id="sand-count">0</dd>
+            <dt>干 / 湿</dt><dd><span id="sand-dry">0</span> / <span id="sand-wet">0</span></dd>
+            <dt>饱和</dt><dd id="sand-saturated">0</dd>
+            <dt>平均湿度</dt><dd id="sand-moisture">—</dd>
+            <dt>一步耗时</dt><dd id="sand-step-ms">0 ms</dd>
+            <dt>活跃格</dt><dd id="sand-active">0</dd>
+          </dl>
+          <p class="inline-label dim" id="sand-repose-note">安息角：干沙 34°｜湿沙 45°｜饱和沙 15°（离散近似）</p>
+          <p class="inline-label" id="sand-collapse">还没有记录到沙崩</p>
+
+          <h4>工具（在场景里按住左键）</h4>
+          <div class="button-grid cols-3" id="sand-tools"></div>
+
+          <div class="row">
+            <label class="mini">笔刷半径 <span id="sand-radius-label">3 格</span>
+              <input type="range" id="sand-radius" min="1" max="12" step="1" value="3" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="mini">堆沙高度 <span id="sand-height-label">6 格</span>
+              <input type="range" id="sand-height" min="1" max="16" step="1" value="6" />
+            </label>
+          </div>
+
+          <div class="switches compact">
+            <label><input type="checkbox" id="sand-visual-toggle" /> 显示沙崩可视化（角度 / 滑落方向 / 连锁范围）</label>
+          </div>
+          <button type="button" id="sand-mark-all" class="wide">让全部沙重新检查稳定性</button>
+          <p class="inline-label dim" id="sand-note">—</p>
+        </details>
+      </aside>
+
+      <!-- ================= 流体（M4 第二部分 · 第 2 批） ================= -->
+      <aside id="fluid-panel" class="panel collapsed">
+        <details open>
+          <summary>💧 流体（粒子）</summary>
+
+          <div class="row">
+            <span class="inline-label dim">粒子</span>
+            <b id="fluid-count">0</b>
+            <span class="inline-label dim">/ 上限</span>
+            <span id="fluid-capacity">0</span>
+          </div>
+          <dl class="stats">
+            <dt>模拟耗时</dt><dd id="fluid-sim-ms">0 ms</dd>
+            <dt>密度误差</dt><dd id="fluid-density">—</dd>
+            <dt>平均邻居</dt><dd id="fluid-neighbors">—</dd>
+            <dt>质量档</dt><dd id="fluid-quality">LOD 0（正常）</dd>
+          </dl>
+          <p class="inline-label dim" id="fluid-surface-note">表面：还没重建过</p>
+
+          <h4>流体类型</h4>
+          <div class="button-grid cols-3" id="fluid-types"></div>
+
+          <h4>工具（在场景里按住左键）</h4>
+          <div class="button-grid cols-3" id="fluid-tools"></div>
+
+          <h4>渲染风格</h4>
+          <div class="button-grid cols-3" id="fluid-styles"></div>
+
+          <div class="row">
+            <label class="mini">笔刷半径 <span id="fluid-radius-label">2.0 米</span>
+              <input type="range" id="fluid-radius" min="0.5" max="12" step="0.5" value="2" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="mini">一次倒多少 <span id="fluid-amount-label">120 个/次</span>
+              <input type="range" id="fluid-amount" min="20" max="2000" step="20" value="120" />
+            </label>
+          </div>
+
+          <div class="switches compact">
+            <label><input type="checkbox" id="fluid-audio-toggle" /> 流体音效（点击后才会出声）</label>
+          </div>
+          <div class="row">
+            <label class="mini">音量
+              <input type="range" id="fluid-volume" min="0" max="1" step="0.05" value="0.6" />
+            </label>
+          </div>
+          <p class="inline-label dim" id="fluid-audio-note">音效：等待一次点击（浏览器要求用户手势之后才能出声）</p>
+
+          <button type="button" id="fluid-clear" class="wide">清空全部流体</button>
+          <p class="inline-label dim" id="fluid-note">—</p>
+        </details>
+      </aside>
+
+      <!-- ================= 内容使用统计（M4 补充 10） ================= -->
+      <aside id="content-stats-panel" class="panel">
+        <details open>
+          <summary>📊 内容使用统计</summary>
+          <canvas id="content-stats-canvas" style="width:100%;height:200px;display:block"></canvas>
+          <div class="legend rows" id="content-stats-legend"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 内容包（M4 补充 1） ================= -->
+      <aside id="content-pack-panel" class="panel">
+        <details open>
+          <summary>🧩 内容包</summary>
+          <div class="switches" id="content-pack-list"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 自定义物品（M4 补充 2） ================= -->
+      <aside id="custom-item-panel" class="panel">
+        <details>
+          <summary>🧰 自定义物品</summary>
+          <!-- 内容全部由 CustomItemUI 生成：形状白名单来自 CUSTOM_SHAPES、上限来自 CUSTOM_ITEM_LIMIT，
+               写死在 HTML 里迟早跟真数据对不上 -->
+          <div id="custom-item-editor">
+            <canvas id="custom-item-preview" style="width:100%;height:170px;display:block"></canvas>
+          </div>
+        </details>
+      </aside>
+
+      <!-- ================= 物理框架（问题 A：4 层全可观测） ================= -->
+      <aside id="physics-debug-panel" class="panel">
+        <details open>
+          <summary>⚙️ 物理框架（4 层）</summary>
+
+          <p class="inline-label dim" id="pd-ready">物理引擎加载中…</p>
+
+          <h4>层 1 · 刚体</h4>
+          <dl class="stats">
+            <dt>刚体 总/动态/唤醒</dt><dd id="pd-bodies">0 / 0 / 0</dd>
+          </dl>
+
+          <h4>层 2 · 关节（6 种）</h4>
+          <dl class="stats">
+            <dt>关节总数</dt><dd id="pd-joints">0</dd>
+          </dl>
+          <div class="legend rows" id="pd-joint-types"></div>
+
+          <h4>层 3 · 触发器</h4>
+          <dl class="stats">
+            <dt>触发器 总/启用</dt><dd id="pd-triggers">0 / 0</dd>
+          </dl>
+          <div class="legend rows" id="pd-trigger-list"></div>
+
+          <h4>层 4 · 逻辑连线</h4>
+          <dl class="stats">
+            <dt>连线 总/启用/已触发</dt><dd id="pd-links">0 / 0 / 0</dd>
+          </dl>
+          <div class="legend rows" id="pd-link-list"></div>
+
+          <dl class="stats">
+            <dt>支撑面索引</dt><dd id="pd-surfaces">0 个</dd>
+            <dt>物理耗时</dt><dd id="pd-ms">0 ms</dd>
+          </dl>
+          <p class="inline-label" id="pd-last-action">最近动作：暂无</p>
+          <p class="inline-label dim" id="pd-selection">未选中关节 / 触发器 / 连线</p>
+
+          <h4>调试绘制</h4>
+          <p class="inline-label dim">
+            接触点是求解器真实在算的点；法线箭头只有<b>方向</b>准确，长度是按穿透与接触点数缩放的相对量，
+            <b>不是牛顿数</b>；速度箭头按 1 m/s = 0.25 米缩放。接触点/速度项默认关闭，需要时再开。
+          </p>
+          <div class="switches" id="pd-draw-switches">
+            <label><input type="checkbox" data-physics-debug="jointLinks" /> 关节连线</label>
+            <label><input type="checkbox" data-physics-debug="jointAnchors" /> 关节锚点</label>
+            <label><input type="checkbox" data-physics-debug="ropeRestLength" /> 绳索松弛长度</label>
+            <label><input type="checkbox" data-physics-debug="triggerBoxes" /> 触发器盒子</label>
+            <label><input type="checkbox" data-physics-debug="logicArrows" /> 逻辑连线箭头</label>
+            <label><input type="checkbox" data-physics-debug="colliderBoxes" /> 碰撞盒</label>
+            <label><input type="checkbox" data-physics-debug="contactPoints" /> 接触点</label>
+            <label><input type="checkbox" data-physics-debug="forceArrows" /> 接触法线箭头（长度是相对量）</label>
+            <label><input type="checkbox" data-physics-debug="velocityVectors" /> 速度向量</label>
+            <label><input type="checkbox" data-physics-debug="sleepState" /> 按休眠状态着色</label>
+            <label><input type="checkbox" data-physics-debug="wireframeOnly" /> 只画线框（省性能）</label>
+          </div>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="pd-clear-joints">清空关节</button>
+            <button type="button" id="pd-clear-triggers">清空触发器</button>
+            <button type="button" id="pd-clear-links">清空逻辑连线</button>
+            <button type="button" id="pd-log-diagnostics">打印物理诊断</button>
+          </div>
+        </details>
+      </aside>
+
+
+  <!-- ================= 物理参数（新） ================= -->
+  <aside id="physics-panel" class="panel">
+    <details open>
+      <summary>🧲 物理参数</summary>
+
+      <h4>重力预设</h4>
+      <div class="button-grid cols-2" id="pp-gravity-presets"></div>
+
+      <h4>重力（竖直） <b id="pp-gravity-value">-9.81 m/s²</b></h4>
+      <input type="range" id="pp-gravity" value="-9.81" />
+
+      <h4>世界配置</h4>
+      <h4>时间步 <b id="pp-timestep-value">16.67 ms/步</b></h4>
+      <input type="range" id="pp-timestep" value="0.016666666666666666" />
+      <h4>最大子步 <b id="pp-substeps-value">4 步</b></h4>
+      <input type="range" id="pp-substeps" value="4" />
+      <h4>求解迭代 <b id="pp-iterations-value">4 次</b></h4>
+      <input type="range" id="pp-iterations" value="4" />
+      <h4>休眠阈值 <b id="pp-sleep-value">0.5（越小越早睡）</b></h4>
+      <input type="range" id="pp-sleep" value="0.5" />
+
+      <h4>默认物理参数</h4>
+      <h4>摩擦 <b id="pp-friction-value">0.50</b></h4>
+      <input type="range" id="pp-friction" value="0.5" />
+      <h4>弹性 <b id="pp-restitution-value">0.20</b></h4>
+      <input type="range" id="pp-restitution" value="0.2" />
+      <h4>线性阻尼 <b id="pp-linear-damping-value">0.05</b></h4>
+      <input type="range" id="pp-linear-damping" value="0.05" />
+      <h4>角阻尼 <b id="pp-angular-damping-value">0.05</b></h4>
+      <input type="range" id="pp-angular-damping" value="0.05" />
+      <h4>最大速度 <b id="pp-max-velocity-value">200.0 m/s</b></h4>
+      <input type="range" id="pp-max-velocity" value="200" />
+
+      <h4>物理材质</h4>
+      <select id="pp-material-select"></select>
+      <p class="inline-label dim" id="pp-selection">未选中物体</p>
+      <button type="button" id="pp-apply-material" class="wide" disabled>应用材质到选中物体</button>
+
+      <h4>性能读数</h4>
+      <dl class="stats">
+        <dt>刚体（动态/静态）</dt><dd id="pp-bodies">0</dd>
+        <dt>接触对</dt><dd id="pp-contacts">0 对</dd>
+        <dt>求解耗时</dt><dd id="pp-solver">0.00 ms</dd>
+        <dt>步进耗时</dt><dd id="pp-step">0.00 ms</dd>
+        <dt>休眠率</dt><dd id="pp-sleep-ratio">0%</dd>
+      </dl>
+      <p class="inline-label dim" id="pp-limit-note"></p>
+
+      <div class="button-grid cols-2">
+        <button type="button" id="pp-reset-defaults">恢复默认</button>
+        <button type="button" id="pp-clear-physics">清空物理世界</button>
+      </div>
+    </details>
+  </aside>
+
+  <!-- ================= 时间控制（新） ================= -->
+  <aside id="time-panel" class="panel">
+    <details open>
+      <summary>⏱ 时间</summary>
+
+      <div class="button-grid cols-2">
+        <button type="button" id="tp-pause">⏸ 暂停</button>
+        <button type="button" id="tp-step">⏭ 单步</button>
+      </div>
+
+      <h4>倍速</h4>
+      <div class="button-grid" id="tp-scales">
+        <button type="button" data-scale="0.25">0.25×</button>
+        <button type="button" data-scale="0.5">0.5×</button>
+        <button type="button" data-scale="1">1×</button>
+        <button type="button" data-scale="2">2×</button>
+        <button type="button" data-scale="4">4×</button>
+      </div>
+
+      <h4>时间轴 <b id="tp-cursor">第 0 帧</b></h4>
+      <input type="range" id="tp-timeline" min="0" max="299" step="1" value="0" />
+      <p class="inline-label" id="tp-state">● 实时</p>
+      <button type="button" id="tp-live" class="wide" disabled>回到实时</button>
+
+      <h4>关键帧快照</h4>
+      <button type="button" id="tp-snapshot" class="wide">存快照</button>
+      <div class="legend rows" id="tp-snapshots"></div>
+      <button type="button" id="tp-clear-history" class="wide">清空回溯缓冲</button>
+
+      <dl class="stats">
+        <dt>模拟时间</dt><dd id="tp-elapsed">0.0 秒</dd>
+        <dt>步数</dt><dd id="tp-steps">0</dd>
+        <dt>缓冲帧数</dt><dd id="tp-frames">0 / 300</dd>
+        <dt>单帧物理</dt><dd id="tp-step-ms">0.00 ms</dd>
+      </dl>
+    </details>
+  </aside>
+
+  <!-- ================= 应力（新） ================= -->
+  <aside id="stress-panel" class="panel">
+    <details open>
+      <summary>🌡 应力</summary>
+
+      <div class="switches compact">
+        <label><input type="checkbox" id="sp-toggle" /> 打开应力着色</label>
+      </div>
+
+      <div class="legend rows" id="sp-legend"></div>
+
+      <div class="row">
+        <label class="mini">配色
+          <select id="sp-scheme">
+            <option value="heat" selected>热力（蓝 → 黄 → 红）</option>
+            <option value="mono">单色（灰度）</option>
+          </select>
+        </label>
+      </div>
+
+      <h4>显示阈值 <b id="sp-threshold-value">0%</b></h4>
+      <input type="range" id="sp-threshold" min="0" max="1" step="0.05" value="0" />
+
+      <div class="legend rows" id="sp-stats"></div>
+
+      <h4>最危险的物体</h4>
+      <div class="legend rows" id="sp-worst"></div>
+      <button type="button" id="sp-focus-worst" class="wide">只看最危险的一个</button>
+
+      <p class="inline-label dim" id="sp-unstable-note">结构稳定</p>
+    </details>
+  </aside>
+
+      <!-- ================= 物理沙盘模式（补充 2） ================= -->
+      <aside id="sandbox-panel" class="panel">
+        <details open>
+          <summary>🧪 物理沙盘模式</summary>
+          <div class="switches compact">
+            <label><input type="checkbox" id="sandbox-toggle" /> 开启物理沙盘模式</label>
+          </div>
+          <div class="switches" id="sandbox-options">
+            <label><input type="checkbox" data-sandbox="forceDynamic" /> 全部转成动态刚体（会掉下来）</label>
+            <label><input type="checkbox" data-sandbox="autoDebugDraw" checked /> 自动打开调试可视化</label>
+            <label><input type="checkbox" data-sandbox="pauseFluid" checked /> 暂停水与沙模拟</label>
+            <label><input type="checkbox" data-sandbox="freePlacement" /> 放置不再需要支撑</label>
+            <label><input type="checkbox" data-sandbox="showHint" checked /> 显示引导提示</label>
+          </div>
+          <p class="inline-label" id="sandbox-status">未开启</p>
+          <h4>开启后会做什么</h4>
+          <div class="legend rows" id="sandbox-effects"></div>
+
+          <h4>压力测试场景（M3 第 8 批）</h4>
+          <p class="inline-label warn">
+            ⚠ 加载压力场景会<b>清空当前世界</b>（几百个刚体没法叠加到现有世界上）。
+            按钮上会写明将生成多少个物体、手机端会降级到多少。
+          </p>
+          <div class="button-grid cols-2" id="stress-test-maps"></div>
+          <p class="inline-label dim" id="stress-test-note">选一个场景，用它的规模压一压物理性能。</p>
+
+          <h4>模板生成（M4 第 3 批）</h4>
+          <p class="inline-label dim">
+            从 8 套模板里选一套，用 9 阶段流水线生成新地图：高度图 → 水 → 沙 → 地表材质 →
+            自然物 → 建筑规划 → 建筑 → 小物品 → 全量冲突检测与修复。
+            <b>树不会被土盖、建筑不重叠不悬空、小物品不堵门</b>都由最后那个阶段保证。
+          </p>
+          <!-- M4 第 7 批：模板卡片 / 参数滑杆 / 种子 / 生成预览 / 回滚入口都由 MapTemplateUI 生成。
+               这里只留挂载点与一条静态文案：契约越少，HTML 与 TS 越不容易对不上。 -->
+          <div id="map-template-panel"></div>
+          <!-- 生成预览大图（补充 4）：面板里那张是卡片缩略图，这张是按当前滑杆与种子重算的 -->
+          <canvas id="map-template-preview" style="width:100%;height:220px;display:block;margin-top:6px"></canvas>
+          <p class="inline-label dim" id="template-note">
+            选一套模板 → 先「预览」看近似地形 → 再「生成」。预览是降采样近似，不是真实体素。
+          </p>
+          <button type="button" id="btn-export-generation-log" class="wide">导出最近一次生成日志</button>
+          <button type="button" id="btn-conflict-overlay" class="wide">显示/隐藏冲突标记（M4 补充 7）</button>
+          <p class="inline-label dim">
+            打开后会把最近一次生成的冲突画成彩框：<b>红=重叠 黄=悬空 橙=越界 紫=被埋 蓝=挡门</b>。
+            框的边长是按严重度放大的<b>标记</b>，不是真实相交体积（相交尺寸只在日志文字里）。
+          </p>
+        </details>
+      </aside>
+
+      <!-- ================= 逻辑连线（M3 第 4 批） ================= -->
+      <aside id="logic-editor" class="panel">
+        <details open>
+          <summary>🧠 逻辑连线</summary>
+
+          <div class="switches compact">
+            <label><input type="checkbox" id="le-drag-mode" /> 拖拽连线模式（在视口里从一个物体拖到另一个）</label>
+          </div>
+          <p class="inline-label dim" id="le-drag-hint">
+            打开后：在画布上一个物体上按下并拖动，到另一个物体上松手。按 Esc 取消。
+          </p>
+
+          <h4>两端</h4>
+          <p class="inline-label" id="le-endpoints">还没选中物体</p>
+          <div class="button-grid cols-2">
+            <button type="button" id="le-use-selection">用当前选中的两个物体</button>
+            <button type="button" id="le-clear-endpoints">清空两端</button>
+          </div>
+
+          <h4>监听事件</h4>
+          <select id="le-event"></select>
+
+          <h4>执行动作</h4>
+          <select id="le-action"></select>
+          <label class="slider">
+            <span>冷却 <b id="le-cooldown-value">0 ms</b></span>
+            <input type="range" id="le-cooldown" min="0" max="5000" step="50" value="0" />
+          </label>
+          <label class="slider">
+            <span>概率 <b id="le-probability-value">100%</b></span>
+            <input type="range" id="le-probability" min="0" max="1" step="0.05" value="1" />
+          </label>
+
+          <h4>逻辑门</h4>
+          <select id="le-gate"></select>
+          <p class="inline-label dim" id="le-gate-note">直接触发：事件一到就执行。</p>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="le-create" class="primary">➕ 建立连线</button>
+            <button type="button" id="le-remove">删除选中连线</button>
+          </div>
+
+          <p class="inline-label" id="le-status">从一个物体拖到另一个，或者选中两个物体后点上面的按钮</p>
+          <h4>已建立的连线</h4>
+          <div class="legend rows" id="le-list"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 关节编辑器（M3 第 3 批） ================= -->
+      <aside id="joint-editor" class="panel">
+        <details open>
+          <summary>🔗 关节编辑器</summary>
+
+          <p class="inline-label" id="je-selection">还没选中物体：先用「选择」工具点两个物体</p>
+
+          <h4>关节类型</h4>
+          <select id="je-type"></select>
+          <p class="inline-label dim" id="je-type-note">铰链适合门与轮子；固定关节用来把两块焊死。</p>
+
+          <h4>轴（单位向量）</h4>
+          <div class="group">
+            <input type="number" id="je-axis-x" value="0" step="1" />
+            <input type="number" id="je-axis-y" value="1" step="1" />
+            <input type="number" id="je-axis-z" value="0" step="1" />
+          </div>
+          <p class="inline-label dim">门用竖直轴 (0,1,0)；轮子用水平轴 (1,0,0) 或 (0,0,1)。零向量会被自动纠正为 Y 轴。</p>
+
+          <h4>限位</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="je-limits-enabled" /> 启用限位</label>
+          </div>
+          <label class="slider">
+            <span>下限 <b id="je-limit-min-value">-1.57</b></span>
+            <input type="range" id="je-limit-min" min="-3.15" max="0" step="0.01" value="-1.57" />
+          </label>
+          <label class="slider">
+            <span>上限 <b id="je-limit-max-value">0.00</b></span>
+            <input type="range" id="je-limit-max" min="0" max="3.15" step="0.01" value="0" />
+          </label>
+
+          <h4>马达</h4>
+          <div class="switches compact">
+            <label><input type="checkbox" id="je-motor-enabled" /> 装上马达</label>
+          </div>
+          <select id="je-motor-mode"></select>
+          <label class="slider">
+            <span>速度 <b id="je-motor-speed-value">1.00</b></span>
+            <input type="range" id="je-motor-speed" min="-6" max="6" step="0.05" value="1" />
+          </label>
+          <label class="slider">
+            <span>目标位置 <b id="je-motor-target-value">1.57</b></span>
+            <input type="range" id="je-motor-target" min="-3.15" max="3.15" step="0.01" value="1.57" />
+          </label>
+          <label class="slider">
+            <span>最大出力 <b id="je-motor-force-value">200</b></span>
+            <input type="range" id="je-motor-force" min="1" max="2000" step="10" value="200" />
+          </label>
+          <label class="slider">
+            <span>刚度 <b id="je-motor-stiffness-value">800</b></span>
+            <input type="range" id="je-motor-stiffness" min="20" max="4000" step="20" value="800" />
+          </label>
+          <label class="slider">
+            <span>阻尼 <b id="je-motor-damping-value">60</b></span>
+            <input type="range" id="je-motor-damping" min="0" max="400" step="5" value="60" />
+          </label>
+          <p class="inline-label dim" id="je-unit-note">—</p>
+
+          <div class="button-grid cols-2">
+            <button type="button" id="je-create" class="primary">🔗 接上关节</button>
+            <button type="button" id="je-apply">应用修改</button>
+            <button type="button" id="je-remove">删除关节</button>
+            <button type="button" id="je-motor-stop">停掉马达</button>
+            <button type="button" id="je-motor-go">走到目标位置</button>
+            <button type="button" id="je-motor-reverse">反转速度</button>
+          </div>
+
+          <p class="inline-label" id="je-status">选中两个物体后点「接上关节」</p>
+          <h4>世界里的关节</h4>
+          <div class="legend rows" id="je-list"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 20 个物理组合（问题 A / 第 5 批） ================= -->
+      <aside id="combo-panel" class="panel">
+        <details open>
+          <summary>🎛 物理组合（20 个成品）</summary>
+          <div class="group">
+            <input type="text" id="combo-search" placeholder="搜索组合名称 / 模型…" />
+            <button type="button" id="combo-close" title="收起">✕</button>
+          </div>
+          <div class="chip-list" id="combo-categories"></div>
+          <p class="inline-label" id="combo-status">选一个组合，一键摆到世界里</p>
+          <div class="map-list" id="combo-list"></div>
+        </details>
+      </aside>
+
+      <!-- ================= 物理教学关卡（M3 补充 10：6 关） ================= -->
+      <aside id="physics-tutorial-panel" class="panel">
+        <details open>
+          <summary>🔬 物理教学（6 关）</summary>
+          <dl class="stats">
+            <dt>关卡</dt><dd id="ptut-level-name">—</dd>
+            <dt>进度</dt><dd id="ptut-level-progress">—</dd>
+            <dt>主题</dt><dd id="ptut-summary">—</dd>
+            <dt>当前步骤</dt><dd id="ptut-step-index">—</dd>
+            <dt>用时</dt><dd id="ptut-elapsed">00:00</dd>
+            <dt>建议用时</dt><dd id="ptut-estimated">—</dd>
+          </dl>
+          <h4 id="ptut-step-title">—</h4>
+          <p class="inline-label" id="ptut-step-text">—</p>
+          <div class="bar"><div class="bar-fill" id="ptut-progress-fill"></div></div>
+          <p class="inline-label warn" id="ptut-step-hint"></p>
+          <h4>还差什么</h4>
+          <div class="legend rows" id="ptut-unmet"></div>
+          <h4>步骤</h4>
+          <div class="legend rows" id="ptut-step-list"></div>
+          <div class="chip-list" id="ptut-level-dots"></div>
+          <div class="button-grid cols-2">
+            <button type="button" id="ptut-prev">◀ 上一步</button>
+            <button type="button" id="ptut-next">下一步 ▶</button>
+            <button type="button" id="ptut-confirm">✓ 我做完了</button>
+            <button type="button" id="ptut-restart">↻ 重来</button>
+            <button type="button" id="ptut-skip">跳过这一关</button>
+            <button type="button" id="ptut-exit">退出教学</button>
+          </div>
+        </details>
+      </aside>
+
+      <!-- ================= 教学关卡（补充 1） ================= -->
+      <aside id="tutorial-panel" class="panel">
+        <details open>
+          <summary>🎓 教学关卡（3 关）</summary>
+          <dl class="stats">
+            <dt>关卡</dt><dd id="tut-level-name">—</dd>
+            <dt>进度</dt><dd id="tut-level-progress">—</dd>
+            <dt>当前步骤</dt><dd id="tut-step-index">—</dd>
+            <dt>用时</dt><dd id="tut-elapsed">00:00</dd>
+          </dl>
+          <h4 id="tut-step-title">—</h4>
+          <p class="inline-label" id="tut-step-text">—</p>
+          <div class="bar"><div class="bar-fill" id="tut-progress-fill"></div></div>
+          <p class="inline-label warn" id="tut-step-hint"></p>
+          <div class="legend rows" id="tut-step-list"></div>
+          <div class="button-grid cols-2">
+            <button type="button" id="tut-prev">◀ 上一步</button>
+            <button type="button" id="tut-next">下一步 ▶</button>
+            <button type="button" id="tut-confirm">✓ 我做完了</button>
+            <button type="button" id="tut-restart">↻ 重来</button>
+            <button type="button" id="tut-skip">跳过这一关</button>
+            <button type="button" id="tut-exit">退出教学</button>
+          </div>
+        </details>
+      </aside>
+      </div>
+
+      <!-- ================= 底部：选择状态条 ================= -->
+      <div id="select-status">
+        <span>选择 <b id="ss-count">0</b> 个</span>
+        <span>状态 <b id="ss-mode">空闲</b></span>
+        <span>分组 <b id="ss-group">—</b></span>
+        <span class="hint" id="ss-hint">左键选物体 · Ctrl+左键加选 · 拖拽框选 · 空格拿起/放下</span>
+      </div>
+
+      <!-- ================= 底部：笔刷状态条 ================= -->
+      <div id="brush-status">
+        <span>模式 <b id="bs-mode">编辑</b></span>
+        <span>笔刷 <b id="bs-brush">抬升</b></span>
+        <span>坐标 <b id="bs-coord">--</b></span>
+        <span>影响 <b id="bs-count">0</b> 格</span>
+        <span>预估 <b id="bs-estimate">0</b> 格</span>
+        <span>耗时 <b id="bs-ms">0</b> ms</span>
+        <span class="hint" id="bs-hint"></span>
+      </div>
+
+      <!-- ================= 底部：引擎状态栏 ================= -->
+      <footer id="statusbar">
+        <span class="stat"><b id="stat-fps">--</b>&nbsp;FPS</span>
+        <span class="stat">模拟 <b id="stat-simtime">0.00</b>&nbsp;s</span>
+        <span class="stat">步数 <b id="stat-steps">0</b></span>
+        <span class="stat">体素 <b id="stat-voxels">0</b></span>
+        <span class="stat">建筑 <b id="stat-buildings">0</b></span>
+        <span class="stat">绘制 <b id="stat-draws">0</b></span>
+        <span class="stat">三角 <b id="stat-tris">0</b></span>
+      </footer>
+
+      <div id="toast"></div>
+
+      <!-- ================= 主菜单 / 参考地图 ================= -->
+      <div id="main-menu">
+        <div class="menu-card">
+          <header class="menu-header">
+            <h2>上帝沙盘模拟器 <small>M1.5</small></h2>
+            <p>选一张参考地图研究地形与建筑，或者从一张空白世界开始。</p>
+          </header>
+
+          <section>
+            <h3>📚 参考地图（点卡片选中，双击直接载入）</h3>
+            <div class="map-list" id="map-list"></div>
+          </section>
+
+          <section>
+            <h3>🧱 新建空白世界</h3>
+            <div class="size-list" id="world-size-list"></div>
+          </section>
+
+          <p class="menu-hint" id="menu-hint"></p>
+
+          <footer class="menu-footer">
+            <button type="button" id="menu-load-map" class="primary">载入参考地图</button>
+            <button type="button" id="menu-empty-world">新建空白世界</button>
+            <button type="button" id="menu-import">导入 JSON 存档</button>
+            <button type="button" id="menu-close">继续当前世界</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- ================= 快捷键提示 ================= -->
+      <div id="shortcut-help">
+        <div class="menu-card shortcut-card">
+          <header class="menu-header">
+            <h2>⌨️ 快捷键速查 <small>按 ? 或 F1 开合</small></h2>
+            <p>按 Esc 关闭。分类里的项可以点标题折叠。</p>
+          </header>
+          <div id="shortcut-list"></div>
+          <footer class="menu-footer">
+            <button type="button" id="btn-shortcut-close" class="primary">知道了</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
