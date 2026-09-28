@@ -127,8 +127,10 @@ export function defaultEnabledPacks(): Set<ContentPackId> {
  */
 export function loadEnabledPacks(): Set<ContentPackId> {
   const fallback = defaultEnabledPacks();
-  if (typeof localStorage === 'undefined') return fallback;
   try {
+    // 守卫要放在 try **里面**：禁用站点数据时，读 localStorage 这个属性本身就会抛
+    // SecurityError，`typeof` 只吞"未声明"、吞不掉 getter 的异常（兼容性审计 R1）
+    if (typeof localStorage === 'undefined') return fallback;
     const raw = localStorage.getItem(CONTENT_PACK_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed: unknown = JSON.parse(raw);
@@ -144,8 +146,9 @@ export function loadEnabledPacks(): Set<ContentPackId> {
 }
 
 export function saveEnabledPacks(enabled: ReadonlySet<ContentPackId>): boolean {
-  if (typeof localStorage === 'undefined') return false;
   try {
+    // 同 loadEnabledPacks：守卫要在 try 里面（R1）
+    if (typeof localStorage === 'undefined') return false;
     localStorage.setItem(CONTENT_PACK_STORAGE_KEY, JSON.stringify([...enabled]));
     return true;
   } catch {

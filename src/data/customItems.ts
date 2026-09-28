@@ -262,8 +262,9 @@ export interface CustomItemStore {
  * 简化版（不重算 id）能挡掉坏数据，而不是让一条 NaN 把整个物理世界带崩。
  */
 export function loadCustomItems(): CustomItemStore {
-  if (typeof localStorage === 'undefined') return { items: [], lastError: null };
   try {
+    // 守卫要在 try 里面：禁用站点数据时读属性本身就会抛（兼容性审计 R1）
+    if (typeof localStorage === 'undefined') return { items: [], lastError: null };
     const raw = localStorage.getItem(CUSTOM_ITEM_STORAGE_KEY);
     if (!raw) return { items: [], lastError: null };
     const parsed: unknown = JSON.parse(raw);
@@ -286,7 +287,13 @@ export function loadCustomItems(): CustomItemStore {
 }
 
 export function saveCustomItems(items: readonly BuildingDef[]): { ok: boolean; reason?: string } {
-  if (typeof localStorage === 'undefined') return { ok: false, reason: '当前环境没有 localStorage（隐私模式？）' };
+  // 守卫本身也要在 try 里：禁用站点数据时读属性就抛（R1）。
+  // 这里没法和下面写 setItem 的那个 try 合并，因为长度检查夹在中间。
+  try {
+    if (typeof localStorage === 'undefined') return { ok: false, reason: '当前环境没有 localStorage（隐私模式？）' };
+  } catch {
+    return { ok: false, reason: '当前环境禁止访问 localStorage（隐私模式？），自定义物品没能保存' };
+  }
   if (items.length > CUSTOM_ITEM_LIMIT) {
     return { ok: false, reason: `最多保存 ${CUSTOM_ITEM_LIMIT} 个自定义物品（现在 ${items.length} 个）` };
   }

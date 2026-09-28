@@ -1,0 +1,97 @@
+<!--
+  M5 第 2 批 · 主题 / 快捷键面板 / 面板管理 的 DOM 片段
+  ====================================================================
+  这个文件**不参与构建**，它只是"请把下面这些节点插进 index.html"的清单
+  （并发编辑期间 index.html 由对方持有，所以这里不直接改它）。
+  三块互相独立，可以只插需要的那一块。
+
+  一句话版：
+  · ThemeSwitch   → 需要一个**空容器**（按钮由代码生成）
+  · ShortcutPanel → 需要一个**空覆盖层**（整张表由代码生成）
+  · PanelManager  → **不需要新节点**，只要给现有面板加 `data-panel` 属性
+
+  样式：三个模块都用**内联 style** 自己搞定（本轮不许改 src/style.css），
+  所以插进去就有样式，不需要往 CSS 里补规则。
+-->
+
+<!-- ================================================================
+     A. 主题切换器  →  src/ui/ThemeSwitch.ts
+     位置：index.html 的 <header id="topbar"> 里，`<div class="group" id="main-toolbar">`
+           **之后**、`</header>` 之前（放在工具栏右边，避免挤动工具按钮）。
+     需要的节点：一个空 div。里面的「深色 / 浅色 / 跟随系统」三个按钮由
+           ThemeSwitch.renderButtons() 生成，并且会在构造时**清空容器**，
+           所以这里别写静态内容（写了会被清掉）。
+     可缺省：容器传 null 时代码不抛异常，只是界面上没有切换入口。
+     ================================================================ -->
+<div class="switches" id="theme-switch" role="group" aria-label="主题切换"></div>
+
+<!-- ================================================================
+     B. 快捷键面板  →  src/ui/ShortcutPanel.ts
+     位置：和现有的 #shortcut-help 同一层（#app 内的最后一个覆盖层），
+           紧跟在 `<!-- ================= 快捷键提示 =================` 那一块**之后**、
+           `<script type="module" src="./src/main.ts">` 之前。
+     需要的节点：一个空 div，**不要**写卡片 / 标题 / 关闭按钮 ——
+           面板会在里面自建 overlay(display/fixed/inset/z-index)、卡片、搜索框、
+           「恢复默认 / 关闭」按钮和分组列表。这里的 div 就是那块**遮罩层本身**。
+     和旧面板的关系：两者可以并存（互不干扰，因为它们各自管自己的容器）。
+           正式替换旧的 ShortcutHelp 时要**同时**做两件事，见文件末尾的说明。
+     ================================================================ -->
+<div id="shortcut-panel" role="dialog" aria-label="快捷键设置"></div>
+
+<!-- ================================================================
+     C. 面板管理  →  src/ui/PanelManager.ts
+     不需要新节点。要做的是给**想被拖动 / 记忆位置**的面板加上 `data-panel` 属性，
+     值必须是**全局唯一**的稳定名字（推荐直接用它的 id，重复的会被跳过并给中文提示）。
+
+     下面按现有 panels 分三类，直接照抄改法即可：
+
+     C1 折叠由「工具切换」控制的（**加 data-panel-no-collapse**）
+        Engine.setTool() 会按当前工具给这些面板加 `.collapsed`，
+        如果 PanelManager 也去记折叠状态，两边会互相拽（面板自己乱开合）。
+        所以它们只让 PanelManager 管拖动：
+          #brush-panel / #building-panel / #placement-panel / #selection-panel
+          #fluid-panel / #sand-panel
+
+        <aside id="brush-panel" class="panel" data-panel="brush-panel" data-panel-no-collapse>
+
+     C2 折叠由玩家自己决定的（**不加 no-collapse**，交给 PanelManager 记忆）
+          #debug-panel / #memory-panel / #history-panel / #prefab-panel
+          #stress-test-panel / #time-panel / #stress-panel / #physics-panel
+          #content-stats-panel / #content-pack-panel / #custom-item-panel / #combo-panel
+
+        <aside id="time-panel" class="panel" data-panel="time-panel">
+
+     C3 弹窗式、不该被拖动的（**什么都不要加**）
+          #logic-editor / #joint-editor / #main-menu / #tutorial-panel / #shortcut-help …
+
+     可选的两个钩子（不给就自动生成，给了就用你的节点）：
+       · 自定义拖动手柄：面板里放一个 <div data-panel-handle>…</div>
+         —— 自动生成的那条手柄样式是内联写死的（高 18px、touch-action:none），
+            想让手柄长得像面板自己的标题栏，就自己提供。（自动生成的手柄会插在面板**最前面**）
+       · 自定义折叠按钮：面板里放一个 <button type="button" data-panel-collapse>▾</button>
+         —— 面板自己给按钮的话，我们只负责切换它的文字（▾ / ▸）与 aria-expanded。
+
+     最后在 JS 里接管一次（只扫一遍即可，Engine 的初始化里调用一次）：
+         const panels = new PanelManager();
+         panels.attach(document.getElementById('app'));
+     ================================================================ -->
+<aside id="time-panel" class="panel" data-panel="time-panel"><!-- 示例：只加了 data-panel --></aside>
+
+<!--
+  ================================================================
+  替换旧 ShortcutHelp 的**完整**步骤（漏掉第 2 步 = 按 ? 看起来没反应）
+  ================================================================
+  1) 插上上面的 #shortcut-panel 容器；
+  2) 删掉 src/core/Engine.ts 里两处开合旧面板的分发：
+       · handleShortcut() 的 `case 'F1': … this.shortcutHelp.toggle();`
+       · handleShortcut() 的 `case 'Slash': if (ev.shiftKey) … this.shortcutHelp.toggle();`
+       （新面板自己在 window 上监听 F1 与 ?，两处都留着会一次按键开+关）
+  3) 删掉 Engine 里 `case 'Escape': … if (this.shortcutHelp.isOpen) this.shortcutHelp.close();`
+     与 `handleToolbarClick()` 里的 `case 'shortcuts': this.shortcutHelp.toggle();`
+     改成 `shortcuts.toggle()`；
+  4) 把 `private readonly shortcutHelp = new ShortcutHelp()` 换成 `new ShortcutPanel(容器, { onChange })`，
+     并在 dispose / 销毁流程里补一句 `shortcutPanel.dispose()`；
+  5) src/ui/ShortcutHelp.ts 与 style.css 里 `#shortcut-help` 那几段样式可以一起删
+     （style.css 由对方持有，清理由对方在统一样式时做；留着也不影响，
+       只是两套快捷键文案会同时存在，玩家看到的是旧那份"Tab 切模式"这类过期说明）。
+-->

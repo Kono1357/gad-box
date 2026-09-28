@@ -276,7 +276,21 @@ export class JointSystem {
    *
    * @returns 关节 id；物理未就绪或配置非法时返回 -1（不抛异常）
    */
-  add(config: JointConfig): number {
+  add(rawConfig: JointConfig): number {
+    // ── 归一化：把"世界"那一侧换到 B 位 ──────────────────────────────────
+    // 数据里两种写法都有：`combos.ts` 有 8 处把世界写在 `bodyA`（空串），而下面这套实现
+    // 只认 `bodyB` 为空串才是世界（那时才会去造静态锚点刚体）。原先 `bodyA` 为空串会在
+    // 下面 `bodyA < 0` 处直接返回 -1，于是这些组合的门不会绕框转、齿轮不转、吊桥不落 ——
+    // 而且 `ComboBuilder` 把 -1 当成"物理还没就绪"，提示"会自动补建"，永远等不到。
+    //
+    // 为什么互换是安全的：关节锚点是**世界坐标**（`config.anchor`），下面两侧各自用
+    // `rotateInverse` 算相对自己刚体的局部偏移，所以 A/B 只是"谁是第一个刚体"，
+    // 对锚点与轴向没有影响。这里不改数据文件，是因为归一化放在这一层能同时修好
+    // 组合、示例、存档导入等**所有**调用方。
+    const config: JointConfig = isWorldRef(rawConfig.bodyA) && !isWorldRef(rawConfig.bodyB)
+      ? { ...rawConfig, bodyA: rawConfig.bodyB, bodyB: '' }
+      : rawConfig;
+
     if (!this.isReady) {
       // Rapier 还在动态 import —— 排队，等 update() 里发现就绪后自动补建
       this.pending.push({ ...config });

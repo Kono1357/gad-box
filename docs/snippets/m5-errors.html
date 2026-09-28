@@ -1,0 +1,115 @@
+<!--
+  M5 第 1 批 · 错误与安全模式面板 DOM 片段
+  ====================================================================
+  这个文件**不参与构建**，它只是"请把下面这些节点插进 index.html"的清单
+  （并发编辑期间 index.html 由别人持有，所以这里不直接改它）。
+
+  插入位置：紧跟在现有的 `#memory-panel`（index.html 里那个
+  `<aside id="memory-panel" class="panel">`）之后、
+  `<script type="module" src="./src/main.ts">` 之前 —— 和 M4 那两个面板同一套放法
+  （侧栏里、偶尔看一眼的仪表盘，不该占主视口）。
+
+  ⚠ 本批交付的四个模块（`ErrorHandler` / `SafeMode` / `CorruptSaveExport` / `ResetManager`）
+  都是**纯逻辑**，一个 DOM 节点都不依赖：下面这段不插进 index.html 也不会报错，
+  只是玩家看不到"错误报告 / 重置"这两个入口而已。
+  反过来说，插进去之后必须按报告里的接线片段把事件接上，否则按钮是死的。
+
+  节点 → 谁用（接线时一一对应）：
+
+  A. `#error-safe-banner`   → `SafeMode.describe()` 的一行中文说明
+     · 文案里已经带了"原因 + 已开启多久 + 关了几项"，所以面板侧不需要再拼一遍数字。
+     · 安全模式开启时建议由接线代码再加上 `class="warn"` 或改 `style.color`，这里不预设样式
+       （style.css 也在被别人改，不新增类名）。
+  B. `#error-summary`       → `ErrorHandler.summarize()`
+  C. `#error-list`          → `ErrorHandler.records`（新的在前；每条一行 message + context + count）
+  D. `#error-restrictions`  → `SafeMode.restrictions`（每项：label + value + reason + entry）
+     · 这一栏是给玩家看的"安全模式究竟关了什么"。**不显示它等于安全模式黑箱**
+       —— 玩家只会觉得"游戏变糊了"，然后去点那些其实没关系的开关。
+  E. `#error-export-report` → `ErrorHandler.exportReport()` → 下载 god-sandbox-error-report.json
+  F. `#error-corrupt-*`     → `CorruptSaveExport`：导出损坏存档的副本
+     · `#error-corrupt-raw` 是要传进 `buildCorruptSaveExport()` 的原文（由接线代码读 localStorage 填入）；
+       这里只放一个空容器，**不把存档内容写进 HTML**（几十 KB 的 base64 写进 DOM 毫无意义）。
+  G. `#error-reset-*`       → `ResetManager`：checkbox 决定 keepFavorites，按钮走两次确认
+     · 二次确认区域默认 `hidden`：`requestConfirm()` 返回的 `message` 填进 `#error-reset-message`，
+       点 `#error-reset-confirm` 才真正执行（`apply()` 需要那个确认对象里的一次性令牌）。
+
+  所有按钮都是 `type="button"`：这个页面没有 form，但历史上 `<button>` 默认 `type="submit"`，
+  放进任何 form / 便捷点击场景里都会引发一次意外提交。这里统一写明，避免将来被搬进表单时出事。
+-->
+
+<!-- ================= 错误与安全模式 ================= -->
+<!-- 结构照抄 #memory-panel：aside.panel + details>summary，折叠状态与其它面板一致 -->
+<aside id="error-panel" class="panel">
+  <details open>
+    <summary>🛟 错误与安全模式</summary>
+
+    <!-- A. 安全模式状态行（SafeMode.describe()，未开启时也有一句"未开启"，不留空白） -->
+    <div id="error-safe-banner" class="inline-label">安全模式未开启：画质与模拟都按正常档位运行。</div>
+
+    <!-- D. 安全模式限制清单（进入安全模式后按 SafeMode.restrictions 逐条渲染） -->
+    <div id="error-restrictions" class="rows"></div>
+
+    <div class="row-buttons">
+      <!-- 手动进入安全模式：由玩家自己决定"先别管画质，我要能玩" -->
+      <button id="error-enter-safe" type="button" title="立刻关掉清单里的高开销功能（可随时退出）">进入安全模式</button>
+      <button id="error-exit-safe" type="button" title="回到正常画质与模拟（如果又崩了可以再进来）">退出安全模式</button>
+    </div>
+
+    <!-- B. 一行摘要：共 N 类 / 累计 M 次 + 最近一条 -->
+    <div id="error-summary" class="inline-label dim">还没有捕获到错误（这是好消息）。</div>
+
+    <!-- C. 最近错误列表（每行一条，新的在上面） -->
+    <div id="error-list" class="rows"></div>
+
+    <div class="row-buttons">
+      <!-- E. 导出错误报告（JSON，可直接贴进问题反馈） -->
+      <button id="error-export-report" type="button" title="导出包含消息、栈、发生位置与次数的 JSON 报告">导出错误报告</button>
+    </div>
+
+    <hr />
+
+    <!-- F. 损坏存档导出：先把坏掉的原数据留一份副本再谈重置 -->
+    <p class="inline-label dim">
+      本地存档读不出来时，先把它**原样**导出来（只导副本，不动本地存储里的原数据），再考虑重置。
+    </p>
+    <div id="error-corrupt-raw" hidden></div>
+    <div id="error-corrupt-note" class="inline-label dim"></div>
+    <div class="row-buttons">
+      <button id="error-export-corrupt" type="button" title="导出损坏存档的副本（含原文、读取错误、时间戳与版本信息）">导出损坏存档</button>
+    </div>
+
+    <hr />
+
+    <!-- G. 重置到初始状态（二次确认） -->
+    <p class="inline-label dim">
+      重置只清除 <code>god-sandbox-*</code> 这些键；同一域名下其它应用的数据不会被触碰（本代码从不调用 storage.clear()）。
+      删除后无法撤销，需要保留当前世界请先「导出 JSON」。
+    </p>
+    <label class="inline-label">
+      <input type="checkbox" id="error-reset-keep-favorites" checked />
+      保留收藏与最近使用（撤销勾选则连偏好一起清除）
+    </label>
+    <div class="row-buttons">
+      <button id="error-reset" type="button" title="清空本地存储里本应用的全部数据，回到初始状态">重置到初始状态</button>
+    </div>
+
+    <!-- 二次确认区域：默认隐藏。requestConfirm() 的 message 填进 #error-reset-message，
+         点 #error-reset-confirm 才调用 apply(storage, confirmation)（令牌一次性） -->
+    <div id="error-reset-confirm" class="rows" hidden>
+      <div id="error-reset-message" class="inline-label"></div>
+      <div class="row-buttons">
+        <button id="error-reset-confirm-button" type="button">确认重置</button>
+        <button id="error-reset-cancel" type="button">取消</button>
+      </div>
+    </div>
+  </details>
+</aside>
+
+<!--
+  一句话接线顺序（细节见交付报告里的 Engine 接线片段）：
+  1. 引擎构造函数里 `new ErrorHandler()` → `install(canvas)`（canvas 是那个参数，
+     传它才能收到 webglcontextlost；error / unhandledrejection 会自动挂到 window）；
+  2. `errorHandler.onError(...)` 里更新 `#error-summary` / `#error-list`；
+  3. 换世界失败 / 读档失败 / 错误数超过 SAFE_MODE_ERROR_THRESHOLD → `safeMode.enter(...)`；
+  4. `dispose()` 里第一件事就是 `errorHandler.uninstall()`（摘监听要先于释放 canvas）。
+-->

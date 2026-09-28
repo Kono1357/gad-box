@@ -364,9 +364,22 @@ export function runSandChecks(check: CheckFn): void {
     check('性能：平的沙层搬动数为 0（不需要动的东西不会被搬）', moved === 0, `最后一步搬动 ${moved}`);
     check('性能：静止之后活跃集为空（静止的沙不花任何时间）',
       sand.activeCount === 0, `活跃 ${sand.activeCount}`);
-    const idle = sand.step(0, 1 / 60);
-    check('性能：没有活跃格时一步耗时接近 0（< 0.05 ms）',
-      idle === 0 && sand.stats.ms < 0.05, `${sand.stats.ms.toFixed(4)} ms`);
+    // 空闲一步的耗时：**取 5 次里的最小值**再比阈值。
+    // 为什么不用单次：并发的 tsc / CI runner 上别的进程一抢占，单次就能测出 0.14 ms，
+    // 而被测代码根本没有工作量 —— 那样这条断言会在"机器忙"时变红，红的却不是它要守的东西
+    // （实测过一次：并发跑 tsc 时 0.1438 ms，停掉并发后连跑两次都是 0 失败）。
+    // 取最小值是安全的：调度噪声只会让某次变**慢**，不会让慢的变快，
+    // 所以只有真实的工作量才能把它抬过阈值。
+    const idleSamples: number[] = [];
+    let idleMoves = 0;
+    for (let i = 0; i < 5; i += 1) {
+      idleMoves += sand.step(0, 1 / 60);
+      idleSamples.push(sand.stats.ms);
+    }
+    const idleMin = Math.min(...idleSamples);
+    check('性能：没有活跃格时一步耗时接近 0（< 0.05 ms；取 5 次最小值以排除调度噪声）',
+      idleMoves === 0 && idleMin < 0.05,
+      `最小 ${idleMin.toFixed(4)} ms（5 次实测：${idleSamples.map((v) => v.toFixed(4)).join(' / ')}）`);
     check('性能：元数据内存被如实报告（两个 Uint8Array）',
       sand.moistureBytes === world.grid.sizeX * world.grid.sizeY * world.grid.sizeZ * 2,
       `${(sand.moistureBytes / 1024 / 1024).toFixed(2)} MB`);

@@ -28,6 +28,9 @@
           <span class="sep"></span>
           <button type="button" data-action="combo" id="btn-combo-panel" title="20 个物理组合（K）">🎛 组合</button>
           <button type="button" data-action="tutorial" id="btn-tutorial" title="教学关卡（J）">🎓 教学</button>
+          <!-- M5 第 3+4 批：帮助中心入口。放在「教学」旁边 —— 两者都是"查怎么玩"的入口，
+               玩家找帮助时会先看教学那一排（docs/snippets/m5-help.html 的 C 条） -->
+          <button type="button" data-action="help" id="btn-help" title="帮助中心（H）：按主题查操作，每条都能一键打开示例">❓ 帮助</button>
           <button type="button" data-action="physics-debug" title="物理框架面板（F2）">⚙️ 物理</button>
           <button type="button" data-action="sandbox" title="物理沙盘模式切换">🧪</button>
           <span class="sep"></span>
@@ -63,12 +66,56 @@
           <button type="button" data-action="rewind" id="btn-rewind" title="回溯一帧（R，Shift+R 前进）">⏪</button>
           <button type="button" data-action="snapshot" id="btn-snapshot" title="保存一个关键帧快照">📸</button>
         </div>
+
+        <!-- M5 第 2 批：主题切换（容器留空，三个按钮由 ThemeSwitch 生成并会清空容器） -->
+        <div class="switches" id="theme-switch" role="group" aria-label="主题切换"></div>
       </header>
 
       <input id="file-input" type="file" accept=".json,application/json" />
 
+      <!-- ================= M5 第 3 批：新手引导气泡 =================
+           ⚠ 这一层必须 pointer-events:none，只有卡片本身 pointer-events:auto：
+           引导的目的是"边做边学"，做成拦截点击的遮罩会让引导说的那件事根本没法做。 -->
+      <div
+        id="onboarding-tip"
+        style="
+          position: fixed;
+          left: 50%;
+          transform: translateX(-50%);
+          bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+          z-index: 55;
+          pointer-events: none;
+          display: none;
+          max-width: min(560px, calc(100vw - 24px));
+        "
+      >
+        <div
+          id="onboarding-card"
+          style="
+            pointer-events: auto;
+            background: rgba(16, 20, 24, 0.94);
+            border: 1px solid #2b3640;
+            border-radius: 8px;
+            color: #d8e2ea;
+            padding: 10px 12px;
+            font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          "
+        >
+          <!-- 「第 3 / 7 步」由 Engine 写 `第 ${index + 1} / ${total} 步` -->
+          <div id="onboarding-step" style="color: #8b9aa8; font-size: 12px"></div>
+          <div id="onboarding-title" style="font-weight: 700; margin: 2px 0 4px"></div>
+          <div id="onboarding-body" style="color: #c6d2dc"></div>
+          <!-- 三个按钮都写 type="button" 并强制 ≥44px 高（手机可点面积要求） -->
+          <div style="display: flex; gap: 6px; margin-top: 8px">
+            <button type="button" id="onboarding-next" style="min-height: 44px; flex: 1">下一步</button>
+            <button type="button" id="onboarding-skip" style="min-height: 44px; flex: 1">跳过引导</button>
+            <button type="button" id="onboarding-restart" style="min-height: 44px; flex: 1; display: none">再看一次</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ================= 左侧：笔刷面板 ================= -->
-      <aside id="brush-panel" class="panel">
+      <aside id="brush-panel" class="panel" data-panel="brush-panel" data-panel-no-collapse>
         <details open>
           <summary>🖌 笔刷</summary>
 
@@ -108,7 +155,7 @@
 
       <!-- ================= 右侧：建筑面板 + 性能面板（同一列，可一起滚动） ================= -->
       <div id="right-stack">
-      <aside id="building-panel" class="panel">
+      <aside id="building-panel" class="panel" data-panel="building-panel" data-panel-no-collapse>
         <details open>
           <summary>🏠 建筑模型库</summary>
 
@@ -206,7 +253,7 @@
       </aside>
 
       <!-- ================= 智能放置 ================= -->
-      <aside id="placement-panel" class="panel">
+      <aside id="placement-panel" class="panel" data-panel="placement-panel" data-panel-no-collapse>
         <details open>
           <summary>✨ 智能放置</summary>
 
@@ -328,7 +375,7 @@
       </aside>
 
       <!-- ================= 选择与微调 ================= -->
-      <aside id="selection-panel" class="panel">
+      <aside id="selection-panel" class="panel" data-panel="selection-panel" data-panel-no-collapse>
         <details open>
           <summary>🖱 选择与拿起</summary>
 
@@ -397,7 +444,7 @@
       </aside>
 
       <!-- ================= 分组 / 预制件 / 蓝图 ================= -->
-      <aside id="prefab-panel" class="panel">
+      <aside id="prefab-panel" class="panel" data-panel="prefab-panel">
         <details>
           <summary>🧩 分组 · 预制件 · 蓝图</summary>
 
@@ -429,7 +476,7 @@
       </aside>
 
       <!-- ================= 历史面板 ================= -->
-      <aside id="history-panel" class="panel">
+      <aside id="history-panel" class="panel" data-panel="history-panel">
         <details>
           <summary>🕘 操作历史</summary>
 
@@ -451,7 +498,7 @@
       </aside>
 
       <!-- ================= 性能与调试面板 ================= -->
-      <aside id="debug-panel" class="panel">
+      <aside id="debug-panel" class="panel" data-panel="debug-panel">
         <details open>
           <summary>📊 性能与调试</summary>
 
@@ -565,7 +612,7 @@
       </aside>
 
       <!-- ================= 内存与帧分析（M4 第 6 批） ================= -->
-      <aside id="memory-panel" class="panel">
+      <aside id="memory-panel" class="panel" data-panel="memory-panel">
         <details open>
           <summary>🧠 内存与帧分析</summary>
 
@@ -617,11 +664,104 @@
         </details>
       </aside>
 
+      <!-- ================= 错误与安全模式（M5 第 1 批） ================= -->
+      <!-- 结构照抄 #memory-panel：aside.panel + details>summary，折叠状态与其它面板一致 -->
+      <aside id="error-panel" class="panel" data-panel="error-panel">
+        <details open>
+          <summary>🛟 错误与安全模式</summary>
+
+          <!-- A. 安全模式状态行（SafeMode.describe()；未开启时也有一句"未开启"，不留空白） -->
+          <div id="error-safe-banner" class="inline-label">安全模式未开启：画质与模拟都按正常档位运行。</div>
+
+          <!-- D. 安全模式限制清单（进入之后按 SafeMode.restrictions 逐条渲染） -->
+          <div id="error-restrictions" class="rows"></div>
+
+          <div class="row-buttons">
+            <button type="button" id="error-enter-safe" title="立刻关掉清单里的高开销功能（可随时退出）">进入安全模式</button>
+            <button type="button" id="error-exit-safe" title="回到正常画质与模拟（如果又崩了可以再进来）">退出安全模式</button>
+          </div>
+
+          <!-- B. 一行摘要：共 N 类 / 累计 M 次 + 最近一条 -->
+          <div id="error-summary" class="inline-label dim">还没有捕获到错误（这是好消息）。</div>
+
+          <!-- C. 最近错误列表（每行一条，新的在上面） -->
+          <div id="error-list" class="rows"></div>
+
+          <div class="row-buttons">
+            <button type="button" id="error-export-report" title="导出包含消息、栈、发生位置与次数的 JSON 报告">导出错误报告</button>
+          </div>
+
+          <hr />
+
+          <!-- F. 损坏存档导出：先把坏掉的原数据留一份副本再谈重置 -->
+          <p class="inline-label dim">
+            本地存档读不出来时，先把它原样导出来（只导副本，不动本地存储里的原数据），再考虑重置。
+          </p>
+          <div id="error-corrupt-note" class="inline-label dim"></div>
+          <div class="row-buttons">
+            <button type="button" id="error-export-corrupt" title="导出损坏存档的副本（含原文、读取错误、时间戳与版本信息）">导出损坏存档</button>
+          </div>
+
+          <hr />
+
+          <!-- G. 重置到初始状态（二次确认） -->
+          <p class="inline-label dim">
+            重置只清除 <code>god-sandbox-*</code> 这些键；同一域名下其它应用的数据不会被触碰（本代码从不调用 storage.clear()）。
+            删除后无法撤销，需要保留当前世界请先「导出 JSON」。
+          </p>
+          <label class="inline-label">
+            <input type="checkbox" id="error-reset-keep-favorites" checked />
+            保留收藏与最近使用（撤销勾选则连偏好一起清除）
+          </label>
+          <div class="row-buttons">
+            <button type="button" id="error-reset" title="清空本地存储里本应用的全部数据，回到初始状态">重置到初始状态</button>
+          </div>
+
+          <!-- 二次确认区域：默认隐藏。点「重置到初始状态」后把 requestConfirm() 的文案填进
+               #error-reset-message 并显示这一块，点 #error-reset-confirm-button 才走
+               confirmDialog.ask → apply(storage, confirmation)（令牌一次性） -->
+          <div id="error-reset-confirm" class="rows" hidden>
+            <div id="error-reset-message" class="inline-label"></div>
+            <div class="row-buttons">
+              <button type="button" id="error-reset-confirm-button">确认重置</button>
+              <button type="button" id="error-reset-cancel">取消</button>
+            </div>
+          </div>
+        </details>
+      </aside>
+
+      <!-- ================= 关卡目录（M5 第 3+4 批） ================= -->
+      <!-- 目录与完成度来自 TUTORIAL_CATALOG / TutorialProgress，分类列表由 Engine 生成 -->
+      <aside id="tutorial-catalog-panel" class="panel" data-panel="tutorial-catalog-panel">
+        <details open>
+          <summary>🎓 关卡目录</summary>
+          <p class="inline-label" id="tutorial-progress-line">教学进度：—</p>
+          <div id="tutorial-catalog-body" class="rows"></div>
+          <hr />
+          <h4>示例场景（一键加载）</h4>
+          <p class="inline-label dim">
+            示例会新建一个空白世界再摆上内容（与压力测试同一条路径）：当前世界的改动请先保存。
+          </p>
+          <div id="example-list" class="rows"></div>
+          <hr />
+          <h4>流体 / 沙土教学（当前关卡）</h4>
+          <p class="inline-label" id="fluid-tutorial-status">未开启：点上面「流体」分类里的关卡开始</p>
+          <div class="row-buttons">
+            <button type="button" id="fluid-tutorial-next">下一关</button>
+            <button type="button" id="fluid-tutorial-restart">重开本关</button>
+            <button type="button" id="fluid-tutorial-exit">退出教学</button>
+          </div>
+          <div class="row-buttons">
+            <button type="button" id="tutorial-progress-reset" title="只清空教学完成度记录，不动世界与存档">清空教学进度</button>
+          </div>
+        </details>
+      </aside>
+
       <!-- ================= 压力测试与性能（M4 第二部分 · 第 7 批） ================= -->
       <!-- ⚠ id 不能叫 stress-panel：M3 的「🌡 应力」面板已经占用了那个 id，
            而 StressPanel.ts 用 must('#stress-panel') 找它 —— 重名会让"应力开关"
            作用到这张面板上（子代理在写断言时顺手查出来的真 bug）。 -->
-      <aside id="stress-test-panel" class="panel">
+      <aside id="stress-test-panel" class="panel" data-panel="stress-test-panel">
         <details open>
           <summary>📈 压力测试与热力图</summary>
 
@@ -659,7 +799,7 @@
       </aside>
 
       <!-- ================= 沙土（M4 第二部分 · 第 3 批） ================= -->
-      <aside id="sand-panel" class="panel collapsed">
+      <aside id="sand-panel" class="panel collapsed" data-panel="sand-panel" data-panel-no-collapse>
         <details open>
           <summary>🏖 沙土</summary>
 
@@ -697,7 +837,7 @@
       </aside>
 
       <!-- ================= 流体（M4 第二部分 · 第 2 批） ================= -->
-      <aside id="fluid-panel" class="panel collapsed">
+      <aside id="fluid-panel" class="panel collapsed" data-panel="fluid-panel" data-panel-no-collapse>
         <details open>
           <summary>💧 流体（粒子）</summary>
 
@@ -751,7 +891,7 @@
       </aside>
 
       <!-- ================= 内容使用统计（M4 补充 10） ================= -->
-      <aside id="content-stats-panel" class="panel">
+      <aside id="content-stats-panel" class="panel" data-panel="content-stats-panel">
         <details open>
           <summary>📊 内容使用统计</summary>
           <canvas id="content-stats-canvas" style="width:100%;height:200px;display:block"></canvas>
@@ -760,15 +900,30 @@
       </aside>
 
       <!-- ================= 内容包（M4 补充 1） ================= -->
-      <aside id="content-pack-panel" class="panel">
+      <aside id="content-pack-panel" class="panel" data-panel="content-pack-panel">
         <details open>
           <summary>🧩 内容包</summary>
           <div class="switches" id="content-pack-list"></div>
         </details>
       </aside>
 
+      <!-- ================= 帮助中心（M5 第 3 批） ================= -->
+      <!-- #help-center-body 是 HelpCenter 的构造参数：分类条 / 搜索框 / 状态行 / 列表
+           全部由它生成，所以这里**不预置任何子节点**（预置的会被当成残留丢掉） -->
+      <aside id="help-panel" class="panel" data-panel="help-panel">
+        <details open>
+          <summary>❓ 帮助中心（按 H 打开 / 收起）</summary>
+          <div id="help-center-body"></div>
+          <div class="row-buttons">
+            <!-- 「重看新手引导」：Onboarding.restart() 刻意不清存档，所以不会变成每次启动都弹 -->
+            <button type="button" id="help-restart-onboarding">重看新手引导</button>
+            <button type="button" id="help-reset-panels" title="把所有面板放回 CSS 里的默认位置（折叠状态保留）">重置面板位置</button>
+          </div>
+        </details>
+      </aside>
+
       <!-- ================= 自定义物品（M4 补充 2） ================= -->
-      <aside id="custom-item-panel" class="panel">
+      <aside id="custom-item-panel" class="panel" data-panel="custom-item-panel">
         <details>
           <summary>🧰 自定义物品</summary>
           <!-- 内容全部由 CustomItemUI 生成：形状白名单来自 CUSTOM_SHAPES、上限来自 CUSTOM_ITEM_LIMIT，
@@ -846,7 +1001,7 @@
 
 
   <!-- ================= 物理参数（新） ================= -->
-  <aside id="physics-panel" class="panel">
+  <aside id="physics-panel" class="panel" data-panel="physics-panel">
     <details open>
       <summary>🧲 物理参数</summary>
 
@@ -901,7 +1056,7 @@
   </aside>
 
   <!-- ================= 时间控制（新） ================= -->
-  <aside id="time-panel" class="panel">
+  <aside id="time-panel" class="panel" data-panel="time-panel">
     <details open>
       <summary>⏱ 时间</summary>
 
@@ -939,7 +1094,7 @@
   </aside>
 
   <!-- ================= 应力（新） ================= -->
-  <aside id="stress-panel" class="panel">
+  <aside id="stress-panel" class="panel" data-panel="stress-panel">
     <details open>
       <summary>🌡 应力</summary>
 
@@ -1143,7 +1298,7 @@
       </aside>
 
       <!-- ================= 20 个物理组合（问题 A / 第 5 批） ================= -->
-      <aside id="combo-panel" class="panel">
+      <aside id="combo-panel" class="panel" data-panel="combo-panel">
         <details open>
           <summary>🎛 物理组合（20 个成品）</summary>
           <div class="group">
@@ -1276,19 +1431,12 @@
         </div>
       </div>
 
-      <!-- ================= 快捷键提示 ================= -->
-      <div id="shortcut-help">
-        <div class="menu-card shortcut-card">
-          <header class="menu-header">
-            <h2>⌨️ 快捷键速查 <small>按 ? 或 F1 开合</small></h2>
-            <p>按 Esc 关闭。分类里的项可以点标题折叠。</p>
-          </header>
-          <div id="shortcut-list"></div>
-          <footer class="menu-footer">
-            <button type="button" id="btn-shortcut-close" class="primary">知道了</button>
-          </footer>
-        </div>
-      </div>
+      <!-- ================= 快捷键面板（M5 第 2 批：替换旧的 #shortcut-help 速查表） ================= -->
+      <!-- 这里就是那块遮罩层本身：面板会在里面自建 overlay / 卡片 / 搜索框 / 按钮 / 分组列表，
+           所以容器里**不写任何内容**（写了会被清掉）。
+           旧的 #shortcut-help 速查表已随 ShortcutPanel 的接入一并移除：
+           两套键位文案同时存在时，玩家看到的是旧那份过期说明。 -->
+      <div id="shortcut-panel" role="dialog" aria-label="快捷键设置"></div>
     </div>
 
     <script type="module" src="./src/main.ts"></script>

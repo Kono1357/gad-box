@@ -1,0 +1,50 @@
+# 断言套件在 CI 里跑一遍。
+#
+# 为什么单独一个 workflow、而不是塞进 deploy.yml：
+# deploy 必须尽量稳（它决定线上能不能玩）。断言套件里有性能与并发相关的用例，
+# 在共享的 CI runner 上偶尔会抖；把两者分开，测试抖了不会连带把部署堵住。
+# 反过来，代码有问题时 deploy 里也仍然会过 typecheck，所以线上不会带着类型错误上线。
+#
+# 为什么没有 lint 步骤：本项目**没有**配置 ESLint/Prettier（`package.json` 里没有相关
+# 依赖，仓库里也没有配置文件）。`tsc --noEmit`（strict + noUnusedLocals + noUnusedParameters）
+# 加上 2000+ 条断言，是当前实际存在的门槛。不存在的东西不写进 CI —— 这一条也是文档里
+# 「已知缺口」的一部分，不要用假步骤把清单凑齐。
+name: 断言套件
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的重复推送只保留最后一次，省 runner 时间
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 类型检查 + 断言套件
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 用 ci 而不是 install：保证和本地锁文件一致
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # 断言各自独立进程跑，不需要浏览器与 GPU
+      - name: 断言套件
+        run: npm run verify

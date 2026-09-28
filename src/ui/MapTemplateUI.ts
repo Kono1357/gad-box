@@ -732,8 +732,9 @@ export class MapTemplateUI {
    * **不抛异常**：为了一个可选的回滚功能而让整个面板打不开是不划算的。
    */
   private loadRecord(): LastGenerationRecord | null {
-    if (typeof sessionStorage === 'undefined') return null;
     try {
+      // 守卫在 try 里面：禁用站点数据时读属性本身就会抛（兼容性审计 R1）
+      if (typeof sessionStorage === 'undefined') return null;
       const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       const parsed: unknown = JSON.parse(raw);
@@ -756,8 +757,9 @@ export class MapTemplateUI {
 
   private saveRecord(record: LastGenerationRecord): void {
     this.lastRecord = record;
-    if (typeof sessionStorage === 'undefined') return;
     try {
+      // 同 loadRecord：守卫要在 try 里面（R1）
+      if (typeof sessionStorage === 'undefined') return;
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(record));
     } catch {
       // 配额满 / 隐私模式：内存里那份仍然可用（本次会话内回滚照样能工作），只是刷新页面后没了

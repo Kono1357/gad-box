@@ -51,6 +51,18 @@ const ENTRIES = [
   { name: '压力测试场景与报告', entry: 'scripts/checks/stress.run.ts' },
   { name: '性能热力图与录制', entry: 'scripts/checks/perfrec.run.ts' },
   { name: '流体求解 Worker', entry: 'scripts/checks/fluidworker.run.ts' },
+  // M5 第 1 批：错误捕获 / 安全模式 / 损坏存档导出 / 重置
+  { name: '错误处理与安全模式', entry: 'scripts/checks/errors.run.ts' },
+  // M5 第 2 批：主题 / 快捷键自定义 / 面板布局
+  { name: '主题与交互面板', entry: 'scripts/checks/ui.run.ts' },
+  // M5 第 3+4 批：新手引导 / 帮助中心 / 示例场景 / 教学目录
+  { name: '新手引导与帮助中心', entry: 'scripts/checks/onboarding.run.ts' },
+  // M5 第 5 批：上面这些模块接进引擎之后的集成级断言（集成没接上就必须红）
+  { name: 'M5 引擎集成', entry: 'scripts/checks/integration.run.ts' },
+  // M5 第 5 批：目标浏览器 / 现代 API / 风险清单的静态审计
+  { name: '兼容性静态审计', entry: 'scripts/checks/compat.run.ts' },
+  // M5 收尾修掉的关节世界锚点 bug（真跑 Rapier 建的关节）
+  { name: '关节世界锚点', entry: 'scripts/checks/jointswap.run.ts' },
   { name: '主验证（M1.5~M4）', entry: 'scripts/verify.ts' },
 ];
 

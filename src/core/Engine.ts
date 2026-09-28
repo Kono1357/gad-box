@@ -10,7 +10,7 @@ import {
   Vector3,
   type PerspectiveCamera,
 } from 'three';
-import { BRUSH_CONFIG, CULLING_CONFIG, VOXEL_CONFIG } from '../config';
+import { BRUSH_CONFIG, CULLING_CONFIG, SAVE_CONFIG, VOXEL_CONFIG } from '../config';
 import { BUILTIN_MAPS, DEFAULT_MAP_ID, getMapById, type MapDefinition } from '../data/maps';
 import { DEFAULT_BRUSH_MATERIAL } from '../data/voxelTypes';
 import { getWorldSize, type WorldSizeId } from '../worldSize';
@@ -35,8 +35,50 @@ import { SupportDebugUI, type SupportDebugStats } from '../ui/SupportDebugUI';
 import { QuickStackTool } from '../ui/QuickStackTool';
 import { SelectionUI, type SelectionUIStats } from '../ui/SelectionUI';
 import { HistoryPanel } from '../ui/HistoryPanel';
-import { ShortcutHelp } from '../ui/ShortcutHelp';
+import { ShortcutPanel } from '../ui/ShortcutPanel';
 import { PrefabPanel } from '../ui/PrefabPanel';
+import { ThemeSwitch } from '../ui/ThemeSwitch';
+import { PanelManager } from '../ui/PanelManager';
+import { HelpCenter } from '../ui/HelpCenter';
+
+// M5 第 1 批：错误采集 / 安全模式 / 损坏存档导出 / 重置
+import { ErrorHandler, type CapturedError } from './ErrorHandler';
+import {
+  SAFE_MODE_ERROR_THRESHOLD,
+  SAFE_MODE_RESTRICTIONS,
+  SAFE_MODE_PIXEL_RATIO,
+  SAFE_MODE_RENDER_DISTANCE,
+  SafeMode,
+  type SafeModeReason,
+} from './SafeMode';
+import { ResetManager, type ResetConfirmation, type ResetStorage } from './ResetManager';
+import {
+  buildCorruptSaveExport,
+  describeCorruptSaveExport,
+  downloadCorruptSaveExport,
+  type CorruptSaveExport,
+} from './CorruptSaveExport';
+// M5 第 3+4 批：新手引导 / 示例场景 / 关卡目录与完成度
+import { Onboarding, emptyOnboardingState, type OnboardingState, type OnboardingStep } from '../tutorial/Onboarding';
+import {
+  EXAMPLE_SCENES,
+  buildSandColumns,
+  describeExample,
+  describeSandShape,
+  fluidCountFor,
+  getExample,
+  validateExample,
+  type ExampleScene,
+} from '../tutorial/Examples';
+import {
+  TUTORIAL_REQUIREMENT_LABELS,
+  describeCatalog,
+  getTutorial,
+  tutorialsByCategory,
+} from '../tutorial/TutorialCatalog';
+import { TutorialProgress } from '../tutorial/TutorialProgress';
+import { TUTORIAL_LEVELS as FLUID_TUTORIAL_LEVELS } from '../tutorial/FluidSandTutorial';
+import { TUTORIAL_LEVELS as BUILDING_TUTORIAL_LEVELS } from '../tutorial/TutorialLevel';
 
 import { Time } from './Time';
 import { World } from './World';
@@ -54,7 +96,7 @@ import { SandEditor, type SandToolResult } from '../sand/SandEditor';
 import { SandVisualizer } from '../sand/SandVisualizer';
 import type { SandTool } from '../sand/SandPhysics';
 import { FluidSave, type FluidSavePayload } from '../save/FluidSave';
-import { getVoxelId } from '../data/voxelTypes';
+import { AIR, getVoxelId } from '../data/voxelTypes';
 import {
   STRESS_SCENES,
   describeScene,
@@ -309,6 +351,52 @@ function fluidBucketKey(bx: number, bz: number): number {
 
 /** 单帧最大真实间隔 */
 const MAX_FRAME_DELTA = 0.25;
+
+/**
+ * 新手引导自动开始前的延迟（毫秒）。
+ *
+ * 为什么不立刻弹：构造函数里还在生成初始世界、物理还在异步加载，
+ * 那一秒钟界面上是加载遮罩 —— 气泡会被压在遮罩下面，玩家看不到就已经过去了。
+ */
+const ONBOARDING_AUTO_START_MS = 1500;
+
+/** 错误面板上最多列几条（缓冲最多 50 条，面板只显示最近这些，全部记录都在导出的报告里） */
+const MAX_ERROR_ROWS = 12;
+
+/**
+ * 「切到某工具」这个动作 → 该工具。
+ *
+ * 单独一张表而不是在 switch 里写五个 case：数字键在地形工具下复用成笔刷模式，
+ * 分发时要同时用到"工具名"与"笔刷模式下标"两个值，写成表能让它们一一对齐（不会有一处写歪）。
+ */
+const TOOL_NAME_BY_ACTION: Record<string, ToolName> = {
+  'tool-terrain': 'terrain',
+  'tool-building': 'building',
+  'tool-select': 'select',
+  'tool-fluid': 'fluid',
+  'tool-sand': 'sand',
+};
+
+/**
+ * 相机移动键（与 `GodCameraControls.handleKeyDown` 的键位保持一致）。
+ * 只给新手引导第 1 步判断"玩家动过视角没有"用 —— 真正移动相机的是相机模块，不是这里。
+ */
+const CAMERA_MOVE_CODES = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE']);
+
+/**
+ * 「切到某工具」的数字键在**地形工具下**对应的笔刷模式下标。
+ *
+ * 为什么是 0~4 而不是 1~5：地形工具下按 1 是"第 1 档笔刷模式"而不是"切到地形笔刷"
+ * （`brushUI.selectModeByIndex(index)` 是 0 起），也就是 Digit2 → 下标 1；
+ * 改键之前那句 `Number(code.slice(5)) - 1` 就是这个换算，这里把同一份换算搬进表里。
+ */
+const TOOL_DIGIT_INDEX: Record<string, number> = {
+  'tool-terrain': 0,
+  'tool-building': 1,
+  'tool-select': 2,
+  'tool-fluid': 3,
+  'tool-sand': 4,
+};
 /** 地形编辑后延迟多久重新做一次支撑检查（毫秒） */
 const SUPPORT_RECHECK_DELAY = 450;
 
@@ -383,8 +471,57 @@ export class Engine {
   readonly supportDebugUI: SupportDebugUI;
   readonly selectionUI: SelectionUI;
   readonly historyPanel: HistoryPanel;
-  readonly shortcutHelp: ShortcutHelp;
+  /**
+   * M5 第 2 批：快捷键面板（可自定义 + 冲突检测）。
+   *
+   * 它**替换**了原来只读的 `ShortcutHelp`：键位表的唯一真源现在在
+   * `ShortcutPanel.DEFAULT_SHORTCUTS`，Engine 只按它返回的动作 id 分发
+   * （见 handleShortcut）—— 玩家改键之后引擎不需要跟着改一行代码。
+   */
+  readonly shortcuts: ShortcutPanel;
+  /** M5 第 2 批：三档主题（深色 / 浅色 / 跟随系统）。构造时就 apply 一次，避免首帧跳变 */
+  readonly themeSwitch: ThemeSwitch;
+  /** M5 第 2 批：面板拖动 / 折叠 / 位置记忆 */
+  readonly panelManager = new PanelManager({
+    onNotice: (message) => console.warn('[面板]', message),
+  });
+  /** M5 第 1 批：全局错误采集器（消息 / 栈 / 位置 / 次数，可导出 JSON 报告） */
+  readonly errorHandler = new ErrorHandler();
+  /** M5 第 1 批：安全模式（只是一个状态 + 一份清单，真正去关东西的是 applySafeModeRestrictions） */
+  readonly safeMode = new SafeMode();
+  /** M5 第 1 批：重置本地存储（必须传 requestConfirm 返回的确认对象才会真的删） */
+  readonly resetManager = new ResetManager();
+  /** M5 第 3 批：新手引导（一帧都不碰 DOM，界面由 Engine 按 update() 返回的 step 渲染） */
+  readonly onboarding = new Onboarding();
   readonly prefabPanel: PrefabPanel;
+  /** M5 第 3 批：帮助中心（搜索 + 每条帮助一键打开示例） */
+  readonly helpCenter: HelpCenter;
+  /** M5 第 4 批：教学完成度（键名 gad-box-tutorial-progress） */
+  readonly tutorialProgress = new TutorialProgress();
+  /**
+   * 最近一次读档失败时留下的损坏存档导出报告。
+   *
+   * 为什么要在**失败那一刻**就留一份：读档失败之后程序会继续自动保存，
+   * 本地存储里那份坏数据随时可能被覆盖掉 —— 到玩家点「导出损坏存档」时，
+   * 现场可能已经不在了。这里存下的报告里带着原文副本（`raw.text`）。
+   */
+  private lastCorruptExport: CorruptSaveExport | null = null;
+  /** 进入安全模式之前的各项开关（退出时按它还原，不假装安全模式没改过任何东西） */
+  private safeModeRestore: {
+    waterEnabled: boolean;
+    sandEnabled: boolean;
+    adaptive: boolean;
+    autoDegrade: boolean;
+    fluidStyle: FluidRenderStyle;
+    stressEnabled: boolean;
+    physicsDebugLines: boolean;
+  } | null = null;
+  /** 新手引导用：外部喂给 Onboarding.update() 的界面状态 */
+  private onboardingState: OnboardingState = emptyOnboardingState();
+  /** 新手引导：当前高亮的目标节点（换步时要把上一处的高亮样式原样还回去） */
+  private onboardingHighlight: { el: HTMLElement; outline: string; outlineOffset: string } | null = null;
+  /** 新手引导：tip 层上挂过的监听（dispose 时要摘） */
+  private readonly onboardingListeners: { el: HTMLElement; type: string; listener: EventListener }[] = [];
   /** 问题 4：换地图的加载遮罩（进度条 + 淡入淡出） */
   readonly loadingOverlay: LoadingOverlay;
   /** 问题 4.1：换地图前的确认对话框 */
@@ -768,6 +905,13 @@ export class Engine {
   private physicsReady = false;
 
   constructor(private readonly options: EngineOptions) {
+    // ---------------- M5：错误采集（第一件事就是装监听）
+    // 必须在所有初始化之前装：构造函数后半段（创建 renderer / 生成世界 / 加载物理）本身就是
+    // 最可能出事的阶段，装晚了那一段的错误一条都收不到。
+    // 传 canvas 是为了 webglcontextlost —— 上下文丢了之后画面全黑，而控制台里一条错误都没有。
+    this.errorHandler.install(options.canvas);
+    this.errorHandler.onError((record) => this.handleCapturedError(record));
+
     // ---------------- 状态
     this.state = {
       mode: 'edit',
@@ -947,7 +1091,23 @@ export class Engine {
       onClear: () => this.clearHistory(),
       onJumpTo: (index) => this.jumpHistory(index),
     });
-    this.shortcutHelp = new ShortcutHelp();
+    // M5 第 2 批：快捷键面板（可自定义 / 冲突检测 / 搜索）。
+    // 它替换了原来只读的 ShortcutHelp —— 开合也由它自己在 window 上监听 F1 与 ?，
+    // 所以 handleShortcut 里那两处旧分发必须删掉（都留着会一次按键开 + 关 = 像没反应）。
+    this.shortcuts = new ShortcutPanel(document.getElementById('shortcut-panel'));
+    // M5 第 2 批：主题。构造时就 apply()：等玩家手动点一次才生效的话，
+    // 首帧会先按 style.css 的默认色画一遍再跳变。默认档是 dark（不是 auto），
+    // 因为 style.css 里还有一批写死的深色，浅色档目前只覆盖了引用变量的那部分组件。
+    this.themeSwitch = new ThemeSwitch(document.getElementById('theme-switch'), {
+      onChange: (mode, resolved) => {
+        const label = mode === 'auto' ? `跟随系统 → ${resolved === 'dark' ? '深色' : '浅色'}` : mode === 'dark' ? '深色' : '浅色';
+        this.showToast(`主题：${label}`, 1800);
+      },
+    });
+    // M5 第 3 批：帮助中心。内容全部由它自己生成（写死在 HTML 里迟早跟 HELP_TOPICS 对不上）
+    this.helpCenter = new HelpCenter(document.getElementById('help-center-body'), {
+      onOpenExample: (id) => void this.loadExampleScene(id),
+    });
     this.prefabPanel = new PrefabPanel({
       onCreateGroup: () => this.createGroup(),
       onUngroup: () => this.ungroupSelection(),
@@ -1340,8 +1500,16 @@ export class Engine {
     });
 
     this.gestureTutorial = new GestureTutorial({
-      onFinished: () => this.gestureTutorial.hide(),
-      onSkip: () => this.gestureTutorial.hide(),
+      // 触屏设备上新手引导排在手势教学**之后**：先知道"手机怎么操作"，再谈"这个世界能干什么"。
+      // 两者同时弹会互相盖住，而且玩家一次只能学一件事。
+      onFinished: () => {
+        this.gestureTutorial.hide();
+        this.startOnboardingIfNeeded();
+      },
+      onSkip: () => {
+        this.gestureTutorial.hide();
+        this.startOnboardingIfNeeded();
+      },
     });
 
     // 物理调试绘制用的线框容器（一个 LineSegments，所有调试线合批一次画完）
@@ -1384,6 +1552,8 @@ export class Engine {
       // 问题 5：玩家一动相机，镜头跟随立刻让位 —— 相机主动权永远在玩家手里
       this.cameraTracker.cancel('manual');
       this.controls.handleDrag(event);
+      // M5 引导第 1 步：玩家自己转了视角
+      this.onboardingState.movedCamera = true;
     };
     this.input.onZoom = (delta) => {
       this.cameraTracker.cancel('manual');
@@ -1426,10 +1596,12 @@ export class Engine {
         onPan: (dx, dy) => {
           this.cameraTracker.cancel('manual');
           this.controls.handleDrag({ dx, dy, button: 2, pointers: 1 });
+          this.onboardingState.movedCamera = true;
         },
         onOrbit: (dx, dy) => {
           this.cameraTracker.cancel('manual');
           this.controls.handleDrag({ dx, dy, button: 0, pointers: 1 });
+          this.onboardingState.movedCamera = true;
         },
         onZoom: (delta) => {
           this.cameraTracker.cancel('manual');
@@ -1491,11 +1663,34 @@ export class Engine {
       this.onPhysicsReady();
     });
 
+    // ---------------- M5：错误面板 / 面板管理 / 关卡目录 / 新手引导
+    // 面板管理放在最后：它要扫 [data-panel] 并读元素的尺寸，得等 DOM（含本批新加的节点）全部就位。
+    // 这些面板的折叠由引擎 / 玩家各自决定，见 index.html 上的 data-panel-no-collapse。
+    this.panelManager.attach(document.getElementById('app') ?? options.container);
+    this.setupErrorPanel();
+    this.refreshErrorPanel();
+    this.setupTutorialPanel();
+    this.setupOnboarding();
+
+    // M5 引导第 4 步「打开一个面板」。`<details>` 的 toggle 事件**不冒泡**，
+    // 所以用捕获阶段在 document 上听 —— 这样不管玩家点的是折叠标题还是面板里的按钮，
+    // 只要是"某个面板被展开了"就能记下来（不去逐个面板挂监听，那种写法一定会漏）
+    document.addEventListener('toggle', this.handlePanelToggled, true);
+
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('orientationchange', this.handleResize);
     document.addEventListener('visibilitychange', this.handleVisibility);
     this.handleResize();
   }
+
+  /** 某个 details 面板展开 → 记下它的 id（引导第 4 步的完成条件就是"开过任何一个面板"） */
+  private handlePanelToggled = (ev: Event): void => {
+    const target = ev.target as HTMLElement | null;
+    if (!target || target.tagName !== 'DETAILS' || !(target as HTMLDetailsElement).open) return;
+    const panel = target.closest('aside[id]') ?? target.closest('[id]');
+    const id = panel?.id ?? target.id;
+    if (id) this.onboardingState.openedPanel = id;
+  };
 
   // ------------------------------------------------------------------ 世界
 
@@ -1677,6 +1872,7 @@ export class Engine {
           this.showToast(`保存失败（${result.message}），已中止换图以避免丢改动`, 3200);
           return;
         }
+        this.onboardingState.savedOnce = true; // 引导：这条路也是"存过一次"
         this.showToast(`已保存（${result.message}），继续换图`, 2200);
       }
     }
@@ -1802,6 +1998,13 @@ export class Engine {
     this.mapTemplateUI?.setBusy(false);
 
     if (!report.ok) {
+      // M5 第 1 批：换世界失败是"这台设备/这一次打开已经不正常了"的典型信号 ——
+      // 先把它记进错误报告（玩家能导出），再进安全模式保证还能玩，最后才谈提示
+      this.errorHandler.capture(`换世界失败（${label}）`, new Error(report.error ?? '未知错误'));
+      this.enterSafeMode(
+        'world-load-failed',
+        `换世界「${label}」时失败：${report.error ?? '未知错误'}（已把画质与模拟压到最低档，先保证能玩）`,
+      );
       this.loadingOverlay.showError(report.error ?? '未知错误');
       this.showToast(`换地图失败：${report.error ?? '未知错误'}`, 4000);
       return;
@@ -2486,7 +2689,13 @@ export class Engine {
     if (backwards) {
       if (!this.physicsTutorial.prev()) this.showToast('已经是第一步', 1800);
     } else {
+      const completedLevel = this.physicsTutorial.level;
       const result = this.physicsTutorial.next(now);
+      if (result === 'level-complete' || result === 'all-complete') {
+        // M5 第 4 批：通关的 **是刚走完的那一关**，所以要在 next() 之前取 level
+        if (completedLevel) this.tutorialProgress.markCompleted(completedLevel.id);
+        this.refreshTutorialPanel();
+      }
       if (result === 'all-complete') {
         const level = this.physicsTutorial.level;
         this.physicsTutorialUI.celebrate(level?.name ?? '全部关卡', this.physicsTutorial.elapsedSeconds(now), true);
@@ -2931,9 +3140,20 @@ export class Engine {
 
   /** 开始第一关 */
   startTutorial(): void {
+    this.startTutorialAt(0);
+  }
+
+  /**
+   * 从第 N 关开始建筑教学（M5 第 4 批：关卡目录里点「开始」用）。
+   *
+   * 与 `startTutorial()` 是同一个入口，只是不再写死第 0 关 ——
+   * 目录里能直接开始某一关，靠的就是这里多出来的一个下标。
+   */
+  private startTutorialAt(levelIndex: number): void {
+    const index = Math.max(0, Math.min(TUTORIAL_LEVELS.length - 1, Math.floor(levelIndex)));
     this.tutorial = {
       active: true,
-      levelIndex: 0,
+      levelIndex: index,
       stepIndex: 0,
       startedMs: performance.now(),
       skipsLeft: 1,
@@ -2941,7 +3161,7 @@ export class Engine {
     };
     this.tutorialUI.show();
     this.tutorialUI.update(this.buildTutorialStats());
-    this.showToast(`教学开始：${TUTORIAL_LEVELS[0]?.name ?? '第 1 关'}`, 2600);
+    this.showToast(`教学开始：${TUTORIAL_LEVELS[index]?.name ?? '第 1 关'}`, 2600);
   }
 
   private tutorialNext(): void {
@@ -2956,6 +3176,9 @@ export class Engine {
     }
     // 最后一关的最后一步：完成这一关
     this.tutorial.completedLevels += 1;
+    // M5 第 4 批：记进统一的教学完成度（建筑关的 id 与目录里的 id 相同）
+    this.tutorialProgress.markCompleted(level.id);
+    this.refreshTutorialPanel();
     if (this.tutorial.levelIndex < TUTORIAL_LEVELS.length - 1) {
       this.tutorial.levelIndex += 1;
       this.tutorial.stepIndex = 0;
@@ -3508,6 +3731,9 @@ export class Engine {
     const restored = FluidSave.decode(payload, system.pool, this.bundle?.sand, this.bundle?.grid);
     if (restored < 0) return `导入失败：${FluidSave.lastError ?? '未知原因'}`;
     system.wake();
+    // M5 安全模式：导入的存档可能远超当前上限，解出来的粒子同样要裁到清单里那个数
+    const trimmed = this.trimFluidToLimit();
+    if (trimmed > 0) console.info(`[安全模式] 导入流体存档后裁掉 ${trimmed} 个粒子`);
     this.fluidRenderer?.setFluidConfig(system.fluidConfig);
     this.showToast(`已导入流体存档：${restored} 个粒子`, 2600);
     return `已恢复 ${restored} 个粒子${FluidSave.lastError ? `（${FluidSave.lastError}）` : ''}`;
@@ -3517,6 +3743,8 @@ export class Engine {
   setFluidTutorialActive(active: boolean): void {
     this.fluidTutorialActive = active;
     if (active) this.ensureFluid();
+    // M5：教学状态行要立刻反映"开没开、第几关"（不然面板上的按钮按下去像没反应）
+    this.refreshTutorialPanel();
   }
 
   get fluidTutorialState(): ReturnType<FluidSandTutorial['update']> {
@@ -3773,8 +4001,10 @@ export class Engine {
 
   /** 面板偏好（收藏 + 最近使用）持久化。内容包的持久化由 contentPacks 自己管。 */
   private loadCatalogPrefs(): void {
-    if (typeof localStorage === 'undefined') return;
     try {
+      // 守卫要在 try 里面：禁用站点数据时，读 localStorage 这个属性本身就会抛 SecurityError，
+      // `typeof` 只吞"未声明"、吞不掉 getter 的异常（兼容性审计 R1）
+      if (typeof localStorage === 'undefined') return;
       const raw = localStorage.getItem(`${CONTENT_PACK_STORAGE_KEY}-prefs`);
       if (!raw) return;
       const parsed = JSON.parse(raw) as { favorites?: unknown; recent?: unknown };
@@ -3792,8 +4022,9 @@ export class Engine {
   }
 
   private saveCatalogPrefs(): void {
-    if (typeof localStorage === 'undefined') return;
     try {
+      // 同 loadCatalogPrefs：守卫要在 try 里面（R1）
+      if (typeof localStorage === 'undefined') return;
       localStorage.setItem(
         `${CONTENT_PACK_STORAGE_KEY}-prefs`,
         JSON.stringify({ favorites: this.favoriteIds, recent: this.recentIds }),
@@ -3848,6 +4079,11 @@ export class Engine {
     if (summaryEl && this.stressSceneId) summaryEl.textContent = this.stressSummary;
     const verdictEl = document.getElementById('stress-verdict');
     if (verdictEl) verdictEl.textContent = this.lastStressVerdict;
+    // M5：错误面板与安全模式状态行跟着这条 400 ms 的节流走。
+    // 不每帧刷：`SafeMode.describe()` 里的"已开启多久"每帧都在变，每帧重排一次 DOM 是白花钱
+    // （而且这两个面板是"偶尔看一眼"的仪表盘，不是需要每帧读的 HUD）
+    this.refreshErrorPanel();
+    this.refreshTutorialPanel();
   }
 
   /**
@@ -4022,6 +4258,12 @@ export class Engine {
   private setSandTool(tool: SandTool): void {
     this.sandTool = tool;
     this.usedSandTools.add(tool);
+    // M5：引导判定 + 第一次用沙土工具时的一次性说明
+    this.onboardingState.usedSandTool = true;
+    this.showOnceHint(
+      'sand-tool',
+      '沙土工具：堆沙会按安息角塌方，「湿沙」能被水冲成泥流。面板里的「沙崩可视化」能看到哪一格在滑动。',
+    );
     this.sandEditor?.setTool(tool);
     if (tool !== 'pile' && this.sandVisualizer && !this.sandVisualizer.isVisible) {
       // 挖沙/湿沙/凝固这些工具"看不出效果"，自动把可视化打开更好用
@@ -4041,6 +4283,8 @@ export class Engine {
     if (!hit) return null;
     const result = editor.apply(hit.x, hit.y, hit.z, performance.now());
     if (result.message) this.showToast(result.message, 1200);
+    // M5 引导：真的改了格子才算"用过沙土工具"
+    if (result.changed > 0) this.onboardingState.usedSandTool = true;
     return result;
   }
 
@@ -4055,6 +4299,12 @@ export class Engine {
   private setFluidTool(tool: FluidTool): void {
     this.fluidEditor?.setTool(tool);
     this.usedFluidTools.add(tool);
+    // M5：引导判定 + 第一次用流体工具时的一次性说明
+    this.onboardingState.usedFluidTool = true;
+    this.showOnceHint(
+      'fluid-tool',
+      '流体工具：按住左键倒水，水会自己流平并把箱子浮起来；「冻结」可以把水冻成闸门。',
+    );
   }
 
   private setFluidStyle(style: FluidRenderStyle): void {
@@ -4292,7 +4542,12 @@ export class Engine {
 
     const fluid: ErodibleFluid = {
       forEachOccupiedCell: (fn) => field.forEachOccupiedCell(fn),
-      addParticles: (x, y, z, count) => system.emitSphere(x, y, z, count, 0.25, [0, 0.4, 0]).spawned,
+      // 安全模式下同样受粒子上限约束（"超出上限的粒子直接不生成"）
+      addParticles: (x, y, z, count) => {
+        const allowed = this.fluidEmissionHeadroom(count);
+        if (allowed <= 0) return 0;
+        return system.emitSphere(x, y, z, allowed, 0.25, [0, 0.4, 0]).spawned;
+      },
       removeParticles: (x, y, z, radius) => system.removeInSphere(x, y, z, radius),
       get particleCount() {
         return system.activeCount;
@@ -4429,8 +4684,16 @@ export class Engine {
     const before = this.fluidTutorial.state;
     const after = this.fluidTutorial.update(snapshot, delta * 1000);
     if (after.completed && !before.completed) {
-      this.showToast(`✅ 教学通关：${this.fluidTutorial.level.name}（${this.fluidTutorial.completedCount}/6）`, 3600);
-      console.info('[教学] 通关', this.fluidTutorial.level.name);
+      // M5 第 4 批：把通关记进 TutorialProgress（关卡 id 与教学目录里的是同一个，
+      // 所以不需要另一张映射表 —— 两边用的是同一份 TUTORIAL_LEVELS 的 id）
+      this.tutorialProgress.markCompleted(this.fluidTutorial.level.id);
+      this.refreshTutorialPanel();
+      this.showToast(
+        // 分母用关卡表自己的长度，不再写死那个 6（写死的话加一关就得回来改这里）
+        `✅ 教学通关：${this.fluidTutorial.level.name}（${this.fluidTutorial.completedCount}/${FLUID_TUTORIAL_LEVELS.length}）`,
+        3600,
+      );
+      console.info('[教学] 通关', this.fluidTutorial.level.name, this.tutorialProgress.describe());
     }
   }
 
@@ -5165,6 +5428,11 @@ export class Engine {
     const tier = this.mobile?.device.tier ?? 'high';
     const preview = this.stressTest.preview(scenario, tier, isMobile);
 
+    // M5：第一次点压力测试时说明一次它在做什么（它会**清空当前世界**，这一点必须讲清）
+    this.showOnceHint(
+      'stress-scene',
+      `压力测试会新建一个空白世界再摆上场景（当前世界的内容不会保留）：本次是「${scenario.name}」。`,
+    );
     // 走统一的换世界入口（它会做卸载、进度条、淡变），
     // 场景内容在 generate 阶段生成 —— 这样"清空当前世界"这件事只有一条代码路径
     void this.switchWorld({ kind: 'stress', scenarioId: scenario.id });
@@ -5306,8 +5574,14 @@ export class Engine {
       const system = this.ensureFluid();
       this.setFluidType(plan.fluid.preset as FluidType);
       const [minX, minY, minZ, maxX, maxY, maxZ] = plan.fluid.box;
-      const result = system.emitBox([minX, minY, minZ], [maxX, maxY, maxZ], plan.fluid.count);
-      notes.push(`${result.spawned} 个粒子` + (result.rejected > 0 ? `（受上限限制少放了 ${result.rejected} 个）` : ''));
+      // M5 安全模式：安全模式下把请求量压到清单里的上限之内（不是生成完再删）
+      const allowed = this.fluidEmissionHeadroom(plan.fluid.count);
+      const result = system.emitBox([minX, minY, minZ], [maxX, maxY, maxZ], allowed);
+      notes.push(
+        `${result.spawned} 个粒子` +
+          (result.rejected > 0 ? `（受上限限制少放了 ${result.rejected} 个）` : '') +
+          (allowed < plan.fluid.count ? '（安全模式：已按粒子上限压缩）' : ''),
+      );
     }
     // ---- 沙
     if (plan.sand && plan.sand.columns > 0) {
@@ -5965,6 +6239,1056 @@ export class Engine {
     this.showToast(`已加载：${source}`);
   }
 
+  // ==================================================================
+  // M5 第 1 批：错误采集 / 安全模式 / 损坏存档导出 / 重置
+  // ==================================================================
+
+  /**
+   * 采集到一条**新的**错误时回调（同一 message + context 的重复不会触发，见 ErrorHandler.onError）。
+   *
+   * 这里做三件事，顺序是有意的：先留痕（console），再更新面板，最后才可能进安全模式 ——
+   * 进安全模式会把画质与模拟改掉，只有在"玩家能从面板上看到为什么"之后才该发生。
+   */
+  private handleCapturedError(record: CapturedError): void {
+    console.warn(`[错误] [${record.context}] ${record.message}`, record.stack ?? '（这条错误没有栈）');
+    this.refreshErrorPanel();
+    const distinct = this.errorHandler.records.length;
+    if (!this.safeMode.state.active && distinct >= SAFE_MODE_ERROR_THRESHOLD) {
+      this.enterSafeMode(
+        'too-many-errors',
+        `本会话已捕获 ${distinct} 类错误（阈值 ${SAFE_MODE_ERROR_THRESHOLD}），最近一条来自「${record.context}」`,
+      );
+      return;
+    }
+    this.showToast(`出错了：${record.message}（详见「🛟 错误与安全模式」面板）`, 4200);
+  }
+
+  /** 手动 / 自动进入安全模式。已经激活时只更新理由（SafeMode 会保留最早的 since） */
+  private enterSafeMode(reason: SafeModeReason, detail: string): void {
+    if (!this.safeMode.state.active) {
+      // 记下进入之前的开关：退出时要还原成"玩家自己选的那一套"，
+      // 而不是把安全模式关掉的东西一律打开（那等于顺手改了玩家的设置）
+      this.safeModeRestore = {
+        waterEnabled: this.state.physics.waterEnabled,
+        sandEnabled: this.state.physics.sandEnabled,
+        adaptive: this.state.quality.adaptive,
+        autoDegrade: this.autoDegrade.enabled,
+        fluidStyle: this.fluidStyle,
+        stressEnabled: this.stress.enabled,
+        physicsDebugLines: this.physicsDebugLines.visible,
+      };
+    }
+    this.safeMode.enter(reason, detail);
+    this.applySafeModeRestrictions();
+    this.showToast(this.safeMode.describe(), 6000);
+  }
+
+  /** 退出安全模式：按进入前的快照还原，再把画质交回玩家选中的预设 */
+  private exitSafeMode(): void {
+    if (!this.safeMode.state.active) {
+      this.showToast('现在不在安全模式', 1800);
+      return;
+    }
+    this.safeMode.exit();
+    const restore = this.safeModeRestore;
+    this.safeModeRestore = null;
+    if (restore) {
+      this.state.physics.waterEnabled = restore.waterEnabled;
+      this.state.physics.sandEnabled = restore.sandEnabled;
+      this.state.quality.adaptive = restore.adaptive;
+      this.adaptive.enabled = restore.adaptive;
+      this.autoDegrade.setEnabled(restore.autoDegrade);
+      this.setFluidStyle(restore.fluidStyle);
+      this.setStressOverlay(restore.stressEnabled);
+      this.physicsDebugLines.visible = restore.physicsDebugLines;
+    }
+    // 画质交回预设：安全模式改过阴影 / AO / 像素比 / 渲染距离，
+    // 而"玩家原本要什么画质"就是那个预设本身 —— 不需要（也不该）再存一份画质快照
+    this.applyQualityPreset(this.state.quality.preset);
+    this.syncDebugSwitches();
+    this.syncPhysics();
+    this.refreshErrorPanel();
+    this.showToast('已退出安全模式：画质与模拟恢复到当前预设', 3200);
+  }
+
+  /**
+   * 落地安全模式的限制清单（M5 第 1 批）。
+   *
+   * ⚠ 清单**不是**在这里另写一遍：每一项都从 `SafeMode.restrictions` 读出来，
+   * 按 `key` 分发，并且照 `value` 设值（不是硬编码 false / 500 / 3）——
+   * 这样"清单"始终是唯一真源：清单改了值，这里的行为立刻跟着变。
+   *
+   * ⚠ 如实说明：`switch` 本身**不会**因为漏了某个 key 而编译不过（这里没有返回值，
+   * TS 做不了穷尽检查）。拦住"清单加了一项、引擎忘了处理"的是断言：
+   * `scripts/checks/integration.check.ts` 会逐个 key 去 Engine 源码里找对应的 `case '...'`。
+   *
+   * 没在安全模式时 `restrictions` 是空数组，所以"什么都不做"也是正确行为
+   * （SafeMode 特意做成这样：让"没开安全模式却把画质关到最低"无法被表达）。
+   */
+  applySafeModeRestrictions(): void {
+    for (const item of this.safeMode.restrictions) {
+      console.info(`[安全模式] ${item.label} → ${String(item.value)}：${item.entry}`);
+      switch (item.key) {
+        case 'fluid-particle-limit': {
+          // "超出上限的粒子直接不生成"由 fluidEmissionHeadroom() 在各生成点执行；
+          // 这里补上"已经在池子里的"那部分：不裁掉的话，一个已经倒了 3000 粒子的世界
+          // 进了安全模式仍然背着 3000 粒子跑，清单这一项就等于没做
+          const removed = this.trimFluidToLimit();
+          if (removed > 0) console.info(`[安全模式] 流体粒子已裁到上限，移除 ${removed} 个`);
+          break;
+        }
+        case 'fluid-surface-rebuild':
+          // 表面重建每帧新建几何体并上传显卡，用粒子点渲染代替
+          this.setFluidStyle(item.value === true ? 'surface' : 'particles');
+          break;
+        case 'shadows':
+          this.state.quality.shadows = item.value === true;
+          this.render.setShadowsEnabled(item.value === true);
+          break;
+        case 'ambient-occlusion':
+          this.state.quality.ao = item.value === true;
+          this.bundle.mesher.aoEnabled = item.value === true;
+          // AO 是烘焙进顶点色的：改了必须重画区块网格，否则面板说关了、画面上还在
+          this.bundle.grid.markAllDirty();
+          break;
+        case 'pixel-ratio': {
+          const ratio = typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : SAFE_MODE_PIXEL_RATIO;
+          this.render.setMaxPixelRatio(Math.max(1, ratio));
+          break;
+        }
+        case 'render-distance': {
+          const distance =
+            typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : SAFE_MODE_RENDER_DISTANCE;
+          const clamped = Math.max(CULLING_CONFIG.minRenderDistance, Math.floor(distance));
+          this.state.quality.renderDistance = clamped;
+          this.bundle.culling.renderDistance = clamped;
+          this.bundle.culling.invalidate();
+          break;
+        }
+        case 'auto-simulation':
+          this.state.physics.waterEnabled = item.value === true;
+          this.state.physics.sandEnabled = item.value === true;
+          this.syncPhysics();
+          break;
+        case 'auto-degrade':
+          // 两个入口都要关：AutoDegrade 是决策源，AdaptiveQuality 是它内部真正改画质的手。
+          // 只关一个的话，另一个仍会在帧率掉下来时把渲染距离改回去 —— 表现是"安全模式刚进去又变糊/又跳回来"
+          this.autoDegrade.setEnabled(item.value === true);
+          this.state.quality.adaptive = item.value === true;
+          this.adaptive.enabled = item.value === true;
+          break;
+        case 'stress-overlay':
+          this.setStressOverlay(item.value === true);
+          if (item.value !== true) {
+            this.physicsDebugLines.visible = false;
+            // 已有几何体也要清空：只把 visible 关掉的话，那批顶点还占着显存与上传带宽
+            const geometry = this.physicsDebugLines.geometry;
+            geometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(0), 3));
+            geometry.setDrawRange(0, 0);
+          }
+          break;
+      }
+    }
+    this.syncDebugSwitches();
+    this.onStateChanged();
+    this.refreshErrorPanel();
+  }
+
+  /** 开关应力着色（与 StressPanel 的 onToggleStress 同一套动作，所以抽出来共用一份） */
+  private setStressOverlay(enabled: boolean): void {
+    this.stress.setEnabled(enabled);
+    // 应力着色接管 instanceColor 通道；关掉时把通道还给稳定性着色（两者刻意互斥）
+    this.render.buildingRenderer.setTintProvider(
+      enabled ? (instance: BuildingInstance) => this.stress.tintFor(instance.id) : null,
+    );
+    this.render.buildingRenderer.setStabilityTint(enabled ? true : this.state.debug.stabilityColors);
+    this.render.buildingRenderer.markDirty();
+  }
+
+  /** 清单里的流体粒子上限；不在安全模式时返回 null（= 不限制） */
+  private safeModeFluidLimit(): number | null {
+    const item = this.safeMode.restrictions.find((entry) => entry.key === 'fluid-particle-limit');
+    if (!item || typeof item.value !== 'number' || !Number.isFinite(item.value)) return null;
+    return Math.max(0, Math.floor(item.value));
+  }
+
+  /**
+   * 这次还能生成几个粒子。
+   *
+   * 所有生成点（笔刷刷水 / 示例与压力场景 / 沙水交互挤出来的水 / 导入流体存档）
+   * 都过这一道门：安全模式下"超出上限的粒子直接不生成"。
+   */
+  private fluidEmissionHeadroom(requested: number): number {
+    const limit = this.safeModeFluidLimit();
+    if (limit === null) return requested;
+    const used = this.fluid?.activeCount ?? 0;
+    return Math.max(0, Math.min(requested, limit - used));
+  }
+
+  /** 把池子里超出上限的粒子裁掉（从尾部往前裁，先裁最新的）。返回裁掉的数量 */
+  private trimFluidToLimit(): number {
+    const limit = this.safeModeFluidLimit();
+    const system = this.fluid;
+    if (limit === null || !system) return 0;
+    let over = system.activeCount - limit;
+    if (over <= 0) return 0;
+    const { alive, highWater } = system.pool;
+    let removed = 0;
+    for (let index = highWater - 1; index >= 0 && over > 0; index -= 1) {
+      if (alive[index] !== 1) continue;
+      if (system.pool.kill(index)) {
+        removed += 1;
+        over -= 1;
+      }
+    }
+    if (removed > 0) system.wake();
+    return removed;
+  }
+
+  /** 刷新「🛟 错误与安全模式」面板（面板上的每个数字都来自模块自己，Engine 不在这里重算） */
+  refreshErrorPanel(): void {
+    const banner = document.getElementById('error-safe-banner');
+    if (banner) {
+      banner.textContent = this.safeMode.describe();
+      // 开启时给一行醒目的颜色：清单里的每一项都生效了，玩家得知道画质为什么变了
+      banner.style.color = this.safeMode.state.active ? 'var(--accent-2)' : '';
+    }
+
+    const summary = document.getElementById('error-summary');
+    if (summary) summary.textContent = this.errorHandler.summarize();
+
+    const records = this.errorHandler.records;
+    const list = document.getElementById('error-list');
+    if (list) {
+      list.textContent = '';
+      for (const record of records.slice(0, MAX_ERROR_ROWS)) {
+        const row = document.createElement('div');
+        row.className = 'inline-label dim';
+        row.textContent =
+          `#${record.id} [${record.context}] ${record.message}（×${record.count}，${formatClock(record.atMs)}）`;
+        // 栈放进 title：面板只有一行，但把鼠标停上去就能看到完整现场（截断与否见 ErrorHandler 的说明）
+        row.title = record.stack ?? '（这条错误没有栈：可能是资源加载失败或 WebGL 上下文丢失）';
+        list.appendChild(row);
+      }
+      if (records.length > MAX_ERROR_ROWS) {
+        const more = document.createElement('div');
+        more.className = 'inline-label dim';
+        more.textContent = `还有 ${records.length - MAX_ERROR_ROWS} 条没显示（缓冲最多留 50 类，导出报告里有全部）`;
+        list.appendChild(more);
+      }
+    }
+
+    const restrictions = document.getElementById('error-restrictions');
+    if (restrictions) {
+      restrictions.textContent = '';
+      const active = this.safeMode.restrictions;
+      if (active.length === 0) {
+        const note = document.createElement('div');
+        note.className = 'inline-label dim';
+        // 数字取自清单本身（写死"9 项"的话，以后清单加一项这句就成了假话）
+        note.textContent =
+          `安全模式未开启：清单里的 ${SAFE_MODE_RESTRICTIONS.length} 项限制都没有生效` +
+          `（进入后这里会逐条列出关了哪 ${SAFE_MODE_RESTRICTIONS.length} 项、为什么关）。`;
+        restrictions.appendChild(note);
+      } else {
+        for (const item of active) {
+          const row = document.createElement('div');
+          row.className = 'inline-label dim';
+          row.textContent = `· ${item.label} → ${String(item.value)}｜${item.entry}`;
+          row.title = item.reason;
+          restrictions.appendChild(row);
+        }
+      }
+    }
+
+    const corruptNote = document.getElementById('error-corrupt-note');
+    if (corruptNote) {
+      corruptNote.textContent = this.lastCorruptExport
+        ? `最近一次读档失败时留下的现场：${describeCorruptSaveExport(this.lastCorruptExport)}`
+        : '还没有读到过坏存档（点「导出损坏存档」会现读一次当前的本地存档）。';
+    }
+  }
+
+  /** 接线错误面板上的按钮（节点缺失时安静跳过：面板被别的版本替换掉也不该抛异常） */
+  private setupErrorPanel(): void {
+    const on = (id: string, listener: () => void): void => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('click', listener);
+    };
+    on('error-enter-safe', () => this.enterSafeMode('manual', '玩家在「错误与安全模式」面板里手动进入'));
+    on('error-exit-safe', () => this.exitSafeMode());
+    on('error-export-report', () => this.exportErrorReport());
+    on('error-export-corrupt', () => this.exportCorruptSave());
+    on('error-reset', () => this.beginReset());
+    on('error-reset-confirm-button', () => void this.confirmReset());
+    on('error-reset-cancel', () => this.cancelReset());
+  }
+
+  /** 导出错误报告（JSON）。下载不成功时如实说明，不假装导出了 */
+  private exportErrorReport(): void {
+    const text = this.errorHandler.exportReport();
+    const name = `god-sandbox-error-report-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+    const result = downloadTextFile(name, text, 'application/json');
+    this.showToast(result.ok ? `已导出错误报告（${text.length} 字符）` : result.message, result.ok ? 3000 : 5200);
+    console.info(`[错误报告] ${name}`, text);
+  }
+
+  /** 导出损坏存档：优先用读档失败那一刻留下的现场，没有就现读一次当前存储 */
+  private exportCorruptSave(): void {
+    const payload = this.lastCorruptExport ?? this.buildCorruptSaveSnapshot();
+    const result = downloadCorruptSaveExport(payload);
+    this.showToast(result.message, result.ok ? 3200 : 5200);
+  }
+
+  /** 现读一次本地存档原文，做成损坏存档报告（读失败本身也如实记进去） */
+  private buildCorruptSaveSnapshot(): CorruptSaveExport {
+    let raw: string | null = null;
+    let readError: string | null = null;
+    try {
+      raw = window.localStorage.getItem(SAVE_CONFIG.storageKey);
+      if (raw === null) raw = window.localStorage.getItem(SAVE_CONFIG.legacyStorageKey);
+    } catch (error) {
+      readError = error instanceof Error ? error.message : String(error);
+    }
+    return buildCorruptSaveExport({ key: SAVE_CONFIG.storageKey, raw, readError });
+  }
+
+  /**
+   * 看一眼本地存档是不是坏的（原文存在但 JSON 解析不过）。
+   *
+   * 为什么要自己判一次：`SaveSystem.loadFromStorage()` 的结果里没有区分码，
+   * "没有存档 / 版本不认识 / JSON 坏了"都只是一句中文消息。
+   * 而只有"JSON 坏了"这一种才需要进安全模式并留现场，所以判据放在这里，靠 `JSON.parse` 本身。
+   */
+  private detectCorruptSave(): { raw: string; parseError: string } | null {
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem(SAVE_CONFIG.storageKey);
+    } catch {
+      return null; // 连读都读不了：那是"存储不可用"，不是"存档坏了"（报告里另有说明）
+    }
+    if (!raw) return null;
+    try {
+      JSON.parse(raw);
+      return null;
+    } catch (error) {
+      return { raw, parseError: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * 交给 `ResetManager` 的存储句柄。
+   *
+   * 为什么不能直接写 `window.localStorage`：在"禁用站点数据/禁止全部 Cookie"的浏览器里，
+   * **读这个属性本身**就抛 `SecurityError`，而 `typeof` 守卫只吞"未声明"，吞不掉 getter 抛的异常
+   * —— 于是重置按钮一按就炸（兼容性审计 R1，这是启动路径之外的第二处高危点）。
+   *
+   * 拿不到真存储时返回一个"一读就抛"的空壳：`ResetManager.scanOwnKeys()` 会读到异常，
+   * 于是 `plan().readable === false`、`requestConfirm()` 返回 null，上层就给出
+   * 「读不到本地存储，重置未做任何改动」的中文说明 —— 这正是我们要的降级行为，
+   * 而不是伪造一个"什么都没删但显示成功"的结果。
+   */
+  private resetStorage(): ResetStorage {
+    try {
+      if (typeof localStorage === 'undefined') throw new Error('当前环境没有 localStorage');
+      return localStorage;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const unavailable = (): never => {
+        throw new Error(`localStorage 不可用（${reason}）`);
+      };
+      return {
+        get length(): number {
+          return unavailable();
+        },
+        key(): string | null {
+          return unavailable();
+        },
+        removeItem(): void {
+          unavailable();
+        },
+      };
+    }
+  }
+
+  /** 「重置到初始状态」第一步：算出清单并显示二次确认（这一步**不改任何数据**） */
+  private beginReset(): void {
+    const checkbox = document.getElementById('error-reset-keep-favorites');
+    const keepFavorites = !(checkbox instanceof HTMLInputElement) || checkbox.checked;
+    const confirmation = this.resetManager.requestConfirm(this.resetStorage(), { keepFavorites });
+    if (!confirmation) {
+      // 存储读不出来时不弹"确认清除"：不管点确定还是取消结果都一样，弹了只会让人以为能删
+      this.showToast(
+        '读不到本地存储（隐私模式或存储被禁用），重置未做任何改动',
+        5200,
+      );
+      return;
+    }
+    this.pendingReset = confirmation;
+    const area = document.getElementById('error-reset-confirm');
+    const message = document.getElementById('error-reset-message');
+    if (message) message.textContent = confirmation.message;
+    if (area) area.hidden = false;
+    this.showToast('请确认下面的清除清单（确认后不可撤销）', 3000);
+  }
+
+  /** 第二步：真正的二次确认（走统一的确认对话框），确认后才 apply */
+  private async confirmReset(): Promise<void> {
+    const confirmation = this.pendingReset;
+    if (!confirmation) {
+      this.showToast('确认已经失效，请重新点「重置到初始状态」', 3000);
+      return;
+    }
+    const choice = await this.confirmDialog.ask({
+      title: confirmation.title,
+      message: confirmation.message,
+      confirmLabel: confirmation.confirmLabel,
+      cancelLabel: confirmation.cancelLabel,
+    });
+    if (choice !== 'confirm') {
+      this.showToast('已取消重置，本地数据一个字节都没动', 2600);
+      return;
+    }
+    // apply 必须拿到 requestConfirm 返回的那个对象（里面有一次性令牌）——
+    // 这就是"两次确认"的第二道：任何想绕过弹框直接清数据的代码都会卡在这里
+    const result = this.resetManager.apply(this.resetStorage(), confirmation);
+    this.pendingReset = null;
+    const area = document.getElementById('error-reset-confirm');
+    if (area) area.hidden = true;
+    const message = document.getElementById('error-reset-message');
+    if (message) message.textContent = result.message;
+    this.showToast(this.resetManager.describeResult(result), 6000);
+    console.info('[重置]', result.message);
+  }
+
+  private cancelReset(): void {
+    this.pendingReset = null;
+    const area = document.getElementById('error-reset-confirm');
+    if (area) area.hidden = true;
+    this.showToast('已取消重置', 2000);
+  }
+
+  /** 待确认的重置（令牌在 confirmation 里，apply 用过即废） */
+  private pendingReset: ResetConfirmation | null = null;
+  /** 上次重画关卡列表时的完成度签名（没变就不重画，避免每 400 ms 重建一次列表） */
+  private lastCatalogProgressSignature = '';
+
+  // ==================================================================
+  // M5 第 3+4 批：新手引导 / 帮助 / 示例 / 关卡
+  // ==================================================================
+
+  /** 接线新手引导（气泡上的三个按钮 + 首次进入自动开始） */
+  private setupOnboarding(): void {
+    const bind = (id: string, listener: () => void): void => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('click', listener);
+      this.onboardingListeners.push({ el, type: 'click', listener });
+    };
+    bind('onboarding-next', () => {
+      this.onboarding.next();
+      // 手动点「下一步」也要立刻反映到界面上：不等到下一帧，玩家的点击必须有即时反馈
+      this.renderOnboardingTip();
+      if (!this.onboarding.active) this.hideOnboardingTip();
+    });
+    bind('onboarding-skip', () => {
+      // 只有"还在引导中"才算跳过。完成之后这个按钮是「关闭」——
+      // 那时再调一次 skip() 会把存储里的 skipped 从 false 改成 true（把"走完"记成"跳过"）
+      if (this.onboarding.active) {
+        this.onboarding.skip();
+        this.showToast('已跳过新手引导，随时可以在「❓ 帮助中心」里点「重看新手引导」', 3600);
+      }
+      this.hideOnboardingTip();
+    });
+    // 「再看一次」按钮：引导走完之后气泡切换成这一态（跳过之后就不再打扰）
+    bind('onboarding-restart', () => {
+      this.onboarding.restart();
+      // 立刻重画：不然卡片上还写着"已完成"，而引导其实已经重新开始了
+      this.renderOnboardingTip();
+      this.showToast(`新手引导重新开始（共 ${this.onboarding.total} 步）`, 2600);
+    });
+    const restartFromHelp = document.getElementById('help-restart-onboarding');
+    if (restartFromHelp) {
+      const listener = (): void => {
+        this.onboarding.restart();
+        // 与气泡上的「再看一次」同一条路：立刻画出第 1 步，别让玩家等下一次状态变化
+        this.renderOnboardingTip();
+        this.showToast(`新手引导已重新开始（共 ${this.onboarding.total} 步）`, 2400);
+      };
+      restartFromHelp.addEventListener('click', listener);
+      this.onboardingListeners.push({ el: restartFromHelp, type: 'click', listener });
+    }
+    // 帮助面板里的「重置面板位置」：面板被拖乱之后的一键复位（折叠状态由 PanelManager 保留）
+    const resetPanels = document.getElementById('help-reset-panels');
+    if (resetPanels) {
+      const listener = (): void => {
+        this.panelManager.resetPositions();
+        this.showToast(`已把 ${this.panelManager.states.length} 个面板放回默认位置（折叠状态保留）`, 3000);
+      };
+      resetPanels.addEventListener('click', listener);
+      this.onboardingListeners.push({ el: resetPanels, type: 'click', listener });
+    }
+
+    // 什么时候自动开始：触屏设备先让手势教学（那是"手机怎么操作"的前置知识），
+    // 等它结束再开始引导；桌面端直接开始。跳过过的玩家（needsOnboarding === false）不再自动弹。
+    if (!this.onboarding.needsOnboarding) return;
+    const isTouch = this.mobile?.isTouchDevice ?? false;
+    const gesturePending = isTouch && !this.gestureTutorial.hasCompletedBefore;
+    if (!gesturePending) {
+      window.setTimeout(() => this.startOnboardingIfNeeded(), ONBOARDING_AUTO_START_MS);
+    }
+  }
+
+  /** 手势教学结束 / 跳过之后由那两个回调调用（触屏设备上引导排在它后面） */
+  private startOnboardingIfNeeded(): void {
+    if (this.disposed || !this.onboarding.needsOnboarding) return;
+    this.onboarding.start();
+    this.renderOnboardingTip();
+    console.info(`[引导] ${this.onboarding.describe()}`);
+  }
+
+  /**
+   * 每帧推进引导。
+   *
+   * 引导模块**自己一帧都不碰 DOM**（这样才能在 Node 里断言"做到第几步、什么时候算完成"），
+   * 所以这里每帧做两件事：把界面状态喂进去、按返回的 step 渲染气泡。
+   * 已经不在引导中时立刻返回（几个 if 的开销）。
+   */
+  private updateOnboarding(dtMs: number): void {
+    if (!this.onboarding.active) return;
+    const previousIndex = this.onboarding.index;
+    const { step, justCompleted } = this.onboarding.update(this.collectOnboardingState(), dtMs);
+    if (justCompleted) {
+      this.showToast('引导完成，随时可以在「❓ 帮助中心」里重看', 3600);
+      // 不立刻把气泡收掉：把它切成"完成"卡片，玩家可以在这一秒里直接点「再看一次」。
+      // 收得太快的话，那三个按钮里的「再看一次」就永远是死的（玩家根本没有机会点到它）
+      this.renderOnboardingDone();
+      console.info('[引导] 完成', step.id);
+      return;
+    }
+    // 只有真的换了步才重画：气泡里的正文与高亮都不便宜，每帧重画会让文字一直在闪
+    if (previousIndex !== this.onboarding.index || !this.onboardingTipVisible()) {
+      this.renderOnboardingTip();
+    }
+  }
+
+  /** 当前刻的界面状态（每帧读一次；全部来自 Engine 自己的字段，不查 DOM） */
+  private collectOnboardingState(): OnboardingState {
+    return this.onboardingState;
+  }
+
+  private onboardingTipVisible(): boolean {
+    const tip = document.getElementById('onboarding-tip');
+    return tip !== null && tip.style.display !== 'none';
+  }
+
+  /** 按当前步骤渲染气泡（标题 / 正文 / 步骤号 / 高亮目标） */
+  private renderOnboardingTip(): void {
+    if (!this.onboarding.active) {
+      this.hideOnboardingTip();
+      return;
+    }
+    const step = this.onboarding.step;
+    const tip = document.getElementById('onboarding-tip');
+    if (!tip) return;
+    const stepEl = document.getElementById('onboarding-step');
+    const titleEl = document.getElementById('onboarding-title');
+    const bodyEl = document.getElementById('onboarding-body');
+    const nextEl = document.getElementById('onboarding-next');
+    const restartEl = document.getElementById('onboarding-restart');
+    if (stepEl) stepEl.textContent = `第 ${this.onboarding.index + 1} / ${this.onboarding.total} 步`;
+    if (titleEl) titleEl.textContent = step.title;
+    if (bodyEl) bodyEl.textContent = step.body;
+    if (nextEl) {
+      nextEl.textContent = this.onboarding.index >= this.onboarding.total - 1 ? '完成' : '下一步';
+    }
+    if (restartEl) restartEl.style.display = 'none';
+    const skipEl = document.getElementById('onboarding-skip');
+    if (skipEl) skipEl.textContent = '跳过引导';
+    tip.style.display = 'block';
+    this.highlightOnboardingAnchor(step);
+  }
+
+  /**
+   * 把气泡切换成"引导已完成"卡片（三个按钮的文案与显隐都换一遍）。
+   *
+   * 这一态里 `Onboarding.active` 已经是 false，所以每帧的 updateOnboarding 不会再动它 ——
+   * 卡片会一直留到玩家点「关闭」或「再看一次」为止。
+   */
+  private renderOnboardingDone(): void {
+    const tip = document.getElementById('onboarding-tip');
+    if (!tip) return;
+    this.clearOnboardingHighlight();
+    const stepEl = document.getElementById('onboarding-step');
+    const titleEl = document.getElementById('onboarding-title');
+    const bodyEl = document.getElementById('onboarding-body');
+    const nextEl = document.getElementById('onboarding-next');
+    const skipEl = document.getElementById('onboarding-skip');
+    const restartEl = document.getElementById('onboarding-restart');
+    if (stepEl) stepEl.textContent = `共 ${this.onboarding.total} 步 · 已完成`;
+    if (titleEl) titleEl.textContent = '引导完成';
+    if (bodyEl) {
+      bodyEl.textContent =
+        '这几步就是世界的全部主干：看（视角）→ 改（地形、建筑）→ 见（面板）→ 玩（流体、沙土）→ 存。' +
+        '想再看一遍可以点「再看一次」，或者在「❓ 帮助中心」里按主题查。';
+    }
+    if (nextEl) nextEl.style.display = 'none';
+    if (skipEl) skipEl.textContent = '关闭';
+    if (restartEl) restartEl.style.display = 'inline-block';
+    tip.style.display = 'block';
+  }
+
+  private hideOnboardingTip(): void {
+    const tip = document.getElementById('onboarding-tip');
+    if (tip) tip.style.display = 'none';
+    this.clearOnboardingHighlight();
+  }
+
+  /**
+   * 高亮当前步骤指向的节点。
+   *
+   * 用**内联 outline** 而不是加 class / 改 style.css：本轮 style.css 只允许加主题变量，
+   * 而且 outline 不参与布局 —— 给面板加边框会把整块界面挤动一下，那种"跳一下"比不高亮还难受。
+   */
+  private highlightOnboardingAnchor(step: OnboardingStep): void {
+    const anchor = step.anchor;
+    const target = anchor ? (document.querySelector(anchor) as HTMLElement | null) : null;
+    if (this.onboardingHighlight && this.onboardingHighlight.el !== target) this.clearOnboardingHighlight();
+    if (!target || this.onboardingHighlight) return;
+    this.onboardingHighlight = {
+      el: target,
+      outline: target.style.outline,
+      outlineOffset: target.style.outlineOffset,
+    };
+    target.style.outline = '2px solid var(--accent, #7fd06a)';
+    target.style.outlineOffset = '2px';
+  }
+
+  /** 把高亮还回去（样式原样恢复，不留痕迹） */
+  private clearOnboardingHighlight(): void {
+    const current = this.onboardingHighlight;
+    if (!current) return;
+    current.el.style.outline = current.outline;
+    current.el.style.outlineOffset = current.outlineOffset;
+    this.onboardingHighlight = null;
+  }
+
+  /** 打开 / 收起帮助面板（工具栏的 ❓ 与 H 键都走这里） */
+  toggleHelpPanel(): void {
+    const details = document.querySelector<HTMLDetailsElement>('#help-panel details');
+    if (!details) {
+      this.showToast('帮助面板不在这个页面里（节点被替换掉了？）', 3200);
+      return;
+    }
+    details.open = !details.open;
+    if (details.open) {
+      // 打开时把镜头让出来一点：帮助面板在右侧栏，玩家多半是要照着做
+      this.refreshTutorialPanel();
+    }
+    this.showToast(details.open ? '已展开「❓ 帮助中心」（按 H 可收起）' : '已收起帮助中心', 2000);
+  }
+
+  // ------------------------------------------------------------------ 示例场景
+
+  /**
+   * 一键加载示例场景（帮助中心里的「打开示例」与关卡目录都走这里）。
+   *
+   * @returns 中文结果说明（**如实**：参数校验不过、缺能力、物理没就绪都会写清楚）
+   *
+   * 复用 `switchWorld({kind:'empty'})` 那条路（它负责卸载旧世界、进度条、淡入淡出），
+   * 生成内容由 `applyExamplePlan()` 做 —— 与压力测试的 `applyStressPlan()` 同一套思路。
+   */
+  async loadExampleScene(id: string): Promise<string> {
+    const scene = getExample(id);
+    if (!scene) {
+      const message = `没有这个示例：${id}`;
+      this.showToast(message, 3200);
+      return message;
+    }
+    // 数据自检：`validateExample()` 用的判据与断言里同一份（越界 / 超上限 / 不存在的 defId）
+    const problems = validateExample(scene);
+    if (problems.length > 0) {
+      const message = `示例「${scene.name}」的数据没通过自检，已中止加载：${problems.join('；')}`;
+      this.showToast(message, 6000);
+      this.errorHandler.capture('示例数据自检失败', new Error(problems.join('；')));
+      return message;
+    }
+    await this.switchWorld({ kind: 'empty', sizeId: scene.size });
+    const notes = this.applyExamplePlan(scene);
+    this.showToast(`${scene.emoji} ${scene.name}：${notes}`, 5200);
+    console.info('[示例]', describeExample(scene), notes);
+    return `${scene.name}：${notes}`;
+  }
+
+  /**
+   * 把一个示例的 plan 落到刚生成的空白世界里。
+   *
+   * 与 `applyStressPlan()` 同一套顺序：**整平地面 → 静态物体 → 动态物体 → 关节 → 沙 → 流体**。
+   * 流体放最后是有意的：`emitBox` 会按静止密度截断，先倒水再放船的话船会先掉下去。
+   *
+   * ⚠ 两处如实说明：
+   * 1. 关节的 body 引用在示例数据里是**objects 下标**（''=世界），而 `JointSystem` 只接受
+   *    刚体句柄、且**世界锚点必须写在 bodyB**（写在 bodyA 会被 `parseBodyRef` 判成非法直接返回 -1）；
+   *    所以这里做一次「下标 → 句柄」映射，并把世界锚点从 A 挪到 B。示例数据本身的写法见下方注释。
+   * 2. 不伪造任何"加载成功"：物理还没就绪时关节会进队列，这里如实把"排队中"写进摘要。
+   */
+  private applyExamplePlan(scene: ExampleScene): string {
+    const notes: string[] = [];
+    const grid = this.bundle.grid;
+
+    // ---- 1) 整平地面：空白世界的地形是随机的，不整平的话示例会被一座山穿过
+    const flattened = this.flattenGround(scene.plan.ground.y, scene.plan.ground.radius);
+    notes.push(`整平半径 ${scene.plan.ground.radius} 米的地面到 y=${scene.plan.ground.y}（改动 ${flattened} 格）`);
+
+    // ---- 2) 物体：一次 addMany（保持顺序，后面关节按下标映射要靠它）
+    const instances = this.buildings.addMany(
+      scene.plan.objects.map((spec) => ({
+        defId: spec.defId,
+        position: spec.position,
+        rotationY: spec.rotationY,
+        scale: 1,
+        mode: spec.mode,
+      })),
+    );
+    if (instances.length !== scene.plan.objects.length) {
+      notes.push(
+        `⚠ 物体只放上了 ${instances.length} / ${scene.plan.objects.length} 个（模型库里缺 defId 时会被跳过）`,
+      );
+    }
+    notes.push(`物体 ${instances.length} 个`);
+
+    // ---- 3) 关节：下标 → 刚体句柄，并把世界锚点从 bodyA 挪到 bodyB（见方法注释）
+    let jointsBuilt = 0;
+    let jointsQueued = 0;
+    let jointsFailed = 0;
+    for (const joint of scene.plan.joints) {
+      const bodyA = this.exampleBodyRef(joint.bodyA, instances);
+      const bodyB = this.exampleBodyRef(joint.bodyB, instances);
+      const aIsWorld = joint.bodyA.trim() === '';
+      const bIsWorld = joint.bodyB.trim() === '';
+      // 世界锚点只能写在 bodyB：两边都是世界就没有关节可言了，直接如实跳过
+      const normalized = aIsWorld && !bIsWorld
+        ? { ...joint, bodyA: bodyB, bodyB: '' }
+        : { ...joint, bodyA, bodyB };
+      if (normalized.bodyA.trim() === '') {
+        jointsFailed += 1;
+        continue;
+      }
+      const jointId = this.framework.addJoint(normalized);
+      if (jointId >= 0) jointsBuilt += 1;
+      else jointsQueued += 1;
+    }
+    if (scene.plan.joints.length > 0) {
+      notes.push(
+        `关节 ${jointsBuilt} 个` +
+          (jointsQueued > 0 ? `（${jointsQueued} 个在排队：物理引擎还没就绪）` : '') +
+          (jointsFailed > 0 ? `（${jointsFailed} 个没能建：两端都指向世界的关节没有意义）` : ''),
+      );
+    }
+
+    // ---- 4) 沙：用导出的 buildSandColumns() 现算排布（不在引擎里再抄一遍规则）
+    if (scene.plan.sand) {
+      const sandId = getVoxelId('sand');
+      let placed = 0;
+      for (const column of buildSandColumns(scene.plan.sand)) {
+        const gx = Math.round(column.x + grid.halfX);
+        const gz = Math.round(column.z + grid.halfZ);
+        for (let dy = 0; dy < column.height; dy += 1) {
+          const y = Math.floor(column.y) + dy;
+          if (!grid.inBounds(gx, y, gz)) continue;
+          grid.setVoxel(gx, y, gz, sandId);
+          placed += 1;
+        }
+      }
+      this.bundle.sand.markAllSand();
+      notes.push(`沙 ${placed} 格（${describeSandShape(scene.plan.sand)}）`);
+    }
+
+    // ---- 5) 流体：桌面/移动端的粒子数由 Examples 自己算（含移动端降级），再被真实上限夹一次
+    if (scene.plan.fluid) {
+      const isMobile = this.mobile?.isTouchDevice ?? false;
+      const requested = fluidCountFor(scene, isMobile);
+      const allowed = this.fluidEmissionHeadroom(requested);
+      if (allowed <= 0) {
+        notes.push(`流体没有生成：安全模式下粒子上限已用满（本次请求 ${requested} 个）`);
+      } else {
+        const system = this.ensureFluid();
+        this.setFluidType(scene.plan.fluid.preset);
+        const [minX, minY, minZ, maxX, maxY, maxZ] = scene.plan.fluid.box;
+        const result = system.emitBox([minX, minY, minZ], [maxX, maxY, maxZ], allowed);
+        notes.push(
+          `${requested} 个粒子（实际生成 ${result.spawned} 个` +
+            (result.rejected > 0 ? `，${result.rejected} 个没放下` : '') +
+            (allowed < requested ? '；安全模式限制了上限' : '') +
+            '）',
+        );
+      }
+    }
+
+    this.render.buildingRenderer.markDirty();
+    this.surfaces.invalidate();
+    this.fluidObstaclesDirty = true;
+    return notes.join('，');
+  }
+
+  /** 示例数据里的 body 引用（objects 下标字符串，''=世界）→ 刚体句柄字符串 */
+  private exampleBodyRef(ref: string, instances: readonly BuildingInstance[]): string {
+    const text = ref.trim();
+    if (text === '') return '';
+    const index = Number(text);
+    if (!Number.isInteger(index) || index < 0 || index >= instances.length) return '';
+    const handle = instances[index]?.physicsHandle ?? -1;
+    return handle >= 0 ? String(handle) : '';
+  }
+
+  /**
+   * 把半径内的一片地整平成 y（示例自带的地面要求）。
+   *
+   * 做法：先用 `getVoxel` 只在需要时写（避免整片重写），顶上一格铺草、下面填土。
+   * 不求快，只求"结果确定"：同一份 plan 在任何设备上整出来的地完全一样。
+   *
+   * @returns 修改过的格子数（面板上要如实显示"改了多少格"，而不是"应该改了多少"）
+   */
+  private flattenGround(y: number, radius: number): number {
+    const grid = this.bundle.grid;
+    const targetY = Math.max(1, Math.min(grid.sizeY - 2, Math.floor(y)));
+    const grassId = getVoxelId('grass');
+    const dirtId = getVoxelId('dirt');
+    const air = AIR;
+    const radiusSq = radius * radius;
+    let changed = 0;
+    const minX = Math.max(0, Math.floor(grid.halfX - radius));
+    const maxX = Math.min(grid.sizeX - 1, Math.ceil(grid.halfX + radius));
+    const minZ = Math.max(0, Math.floor(grid.halfZ - radius));
+    const maxZ = Math.min(grid.sizeZ - 1, Math.ceil(grid.halfZ + radius));
+    for (let x = minX; x <= maxX; x += 1) {
+      const dx = x - grid.halfX + 0.5;
+      for (let z = minZ; z <= maxZ; z += 1) {
+        const dz = z - grid.halfZ + 0.5;
+        if (dx * dx + dz * dz > radiusSq) continue;
+        for (let vy = 0; vy < grid.sizeY; vy += 1) {
+          const wanted = vy > targetY ? air : vy === targetY ? grassId : dirtId;
+          if (grid.getVoxel(x, vy, z) === wanted) continue;
+          grid.setVoxel(x, vy, z, wanted);
+          changed += 1;
+        }
+      }
+    }
+    grid.markAllDirty();
+    this.terrainCollider.markDirty();
+    return changed;
+  }
+
+  // ------------------------------------------------------------------ 关卡目录
+
+  /** 接线关卡目录面板（分类列表 + 完成度 + 流体教学的三个按钮） */
+  private setupTutorialPanel(): void {
+    this.buildTutorialCatalogBody();
+    this.buildExampleList();
+    const on = (id: string, listener: () => void): void => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('click', listener);
+    };
+    on('fluid-tutorial-next', () => {
+      if (!this.fluidTutorialActive) {
+        this.showToast('流体教学还没开始：先在上面点一关', 2600);
+        return;
+      }
+      const moved = this.nextTutorialLevel();
+      this.showToast(moved ? `已进入：${this.fluidTutorial.level.name}` : '已经是最后一关（再点一次就是通关）', 2600);
+      this.refreshTutorialPanel();
+    });
+    on('fluid-tutorial-restart', () => {
+      this.resetFluidTutorial();
+      this.refreshTutorialPanel();
+      this.showToast(`已重开：${this.fluidTutorial.level.name}`, 2400);
+    });
+    on('fluid-tutorial-exit', () => {
+      this.setFluidTutorialActive(false);
+      this.refreshTutorialPanel();
+      this.showToast('已退出流体 / 沙土教学', 2400);
+    });
+    on('tutorial-progress-reset', () => {
+      this.tutorialProgress.reset();
+      this.refreshTutorialPanel();
+      this.showToast(`已清空教学进度${this.tutorialProgress.lastError ? `（${this.tutorialProgress.lastError}）` : ''}`, 3000);
+    });
+    this.refreshTutorialPanel();
+  }
+
+  /**
+   * 重画分类 + 关卡列表（带完成度标记）。
+   *
+   * 与按钮接线分开（`setupTutorialPanel`）：这块每次通关都要重画，
+   * 而按钮只该接一次 —— 混在一起的话每重画一次就多一批监听器，
+   * 表现是"点一次「下一关」跳了两关"这种越点越离谱的 bug。
+   *
+   * 只在完成度**变了**的时候才重画（由 `lastCatalogProgressSignature` 记住上一次的样子）。
+   */
+  private buildTutorialCatalogBody(): void {
+    const body = document.getElementById('tutorial-catalog-body');
+    if (body) {
+      body.textContent = '';
+      for (const [category, levels] of tutorialsByCategory()) {
+        const title = document.createElement('div');
+        title.className = 'inline-label';
+        title.textContent = `${category}（${levels.length} 关）`;
+        body.appendChild(title);
+        for (const level of levels) {
+          const row = document.createElement('div');
+          row.className = 'inline-label dim';
+          const done = this.tutorialProgress.isCompleted(level.id);
+          row.textContent = `${done ? '✅' : '▫️'} ${level.name}｜${level.goal}`;
+          row.title = `${level.successHint}\n需要：${level.requires.map((id) => TUTORIAL_REQUIREMENT_LABELS[id] ?? id).join('、') || '无'}`;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = done ? '重玩' : '开始';
+          button.addEventListener('click', () => this.startTutorialLevel(level.id));
+          const wrap = document.createElement('div');
+          wrap.className = 'row-buttons';
+          wrap.appendChild(button);
+          row.appendChild(wrap);
+          body.appendChild(row);
+        }
+      }
+      const footnote = document.createElement('p');
+      footnote.className = 'inline-label dim';
+      footnote.textContent =
+        '建筑 3 关与物理 6 关共用既有的教学面板（点开世界里的教学卡片）；流体 / 沙土 6 关用下面那块状态行。';
+      body.appendChild(footnote);
+    }
+    this.lastCatalogProgressSignature = this.tutorialProgress.completedIds.join(',');
+  }
+
+  /**
+   * 示例场景列表（每个示例一个「打开」按钮）。
+   *
+   * 为什么要有这一块：示例本来只能从帮助中心的「打开示例」按钮间接进入，
+   * 那不是一条"想逛一圈示例"时能用上的入口。这里直接把 12 个示例列出来，
+   * 按钮的说明文字用 `describeExample()`（同一个模块算出来的真实用量，不是这里另写一句）。
+   *
+   * 只建一次，不参与刷新：示例本身是静态数据，没有会变的完成度。
+   */
+  private buildExampleList(): void {
+    const list = document.getElementById('example-list');
+    if (!list) return;
+    list.textContent = '';
+    for (const scene of EXAMPLE_SCENES) {
+      const row = document.createElement('div');
+      row.className = 'inline-label dim';
+      row.textContent = `${scene.emoji} ${scene.name}（${scene.size}）`;
+      // 完整一句话（物体 / 粒子 / 沙的用量）放进 title：列表要短，但玩家点之前该能看全
+      row.title = describeExample(scene);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = '打开';
+      button.title = describeExample(scene);
+      button.addEventListener('click', () => void this.loadExampleScene(scene.id));
+      const wrap = document.createElement('div');
+      wrap.className = 'row-buttons';
+      wrap.appendChild(button);
+      row.appendChild(wrap);
+      list.appendChild(row);
+    }
+  }
+
+  /** 刷新进度行与流体教学状态行（列表只在完成度真的变了时重画） */
+  refreshTutorialPanel(): void {
+    if (this.tutorialProgress.completedIds.join(',') !== this.lastCatalogProgressSignature) {
+      this.buildTutorialCatalogBody();
+    }
+    const line = document.getElementById('tutorial-progress-line');
+    if (line) {
+      line.textContent = `${this.tutorialProgress.describe()}｜${describeCatalog()}`
+        + (this.tutorialProgress.lastError ? `（${this.tutorialProgress.lastError}）` : '');
+    }
+    const status = document.getElementById('fluid-tutorial-status');
+    if (status) {
+      if (!this.fluidTutorialActive) {
+        status.textContent = '未开启：点上面「流体 / 沙土」分类里的关卡开始';
+      } else {
+        const state = this.fluidTutorial.state;
+        // hint 是关卡自己给的“还差什么”，直接用它（在引擎里重算条件就是第二份真源）
+        const hint = state.hint.length > 0 ? state.hint : '条件已满足，正在结算…';
+        status.textContent =
+          `第 ${this.fluidTutorial.completedCount + 1} 关「${this.fluidTutorial.level.name}」：` +
+          `${this.fluidTutorial.level.goal}（${hint}）`;
+      }
+    }
+  }
+
+  /**
+   * 从关卡目录开始一关。
+   *
+   * 三类关卡各有自己的运行器（建筑 / 物理 / 流体），这里只做分发；
+   * 找不到运行器或关卡没解锁时**如实说明**，不假装开始成功了。
+   */
+  startTutorialLevel(id: string): string {
+    const meta = getTutorial(id);
+    if (!meta) {
+      const message = `目录里没有这一关：${id}`;
+      this.showToast(message, 3000);
+      return message;
+    }
+    const fluidIndex = FLUID_TUTORIAL_LEVELS.findIndex((level) => level.id === id);
+    if (fluidIndex >= 0) {
+      this.fluidTutorial.reset(fluidIndex);
+      this.setFluidTutorialActive(true);
+      this.refreshTutorialPanel();
+      const message = `已开始流体 / 沙土教学：${this.fluidTutorial.level.name}`;
+      this.showToast(`${message}（${this.fluidTutorial.level.goal}）`, 4200);
+      return message;
+    }
+    const physicsIndex = PHYSICS_TUTORIAL_LEVELS.findIndex((level) => level.id === id);
+    if (physicsIndex >= 0) {
+      // 物理教学关**按顺序解锁**（jumpPhysicsTutorialLevel 里有一道"已完成数"的授权检查）。
+      // 这里不绕过它：没解锁就如实说，并且从第 1 关开始 —— 那才是这个进度下能玩的
+      if (!this.physicsTutorial.active) this.advancePhysicsTutorial(false);
+      const snapshot = this.physicsTutorial.snapshot();
+      if (physicsIndex > snapshot.completedLevels) {
+        const message = `「${meta.name}」还没解锁（物理教学关按顺序解锁，当前已完成 ${snapshot.completedLevels} 关），已从当前关卡开始`;
+        this.showToast(message, 5200);
+        this.refreshTutorialPanel();
+        return message;
+      }
+      this.jumpPhysicsTutorialLevel(physicsIndex);
+      this.refreshTutorialPanel();
+      const message = `已跳到物理教学关：${this.physicsTutorial.level?.name ?? meta.name}`;
+      this.showToast(message, 3200);
+      return message;
+    }
+    const buildingIndex = BUILDING_TUTORIAL_LEVELS.findIndex((level) => level.id === id);
+    if (buildingIndex >= 0) {
+      this.startTutorialAt(buildingIndex);
+      this.refreshTutorialPanel();
+      const message = `已开始建筑教学：${BUILDING_TUTORIAL_LEVELS[buildingIndex]?.name ?? meta.name}`;
+      this.showToast(message, 3200);
+      return message;
+    }
+    const message = `「${meta.name}」暂未接入：目录里登记了这一关，但当前引擎里没有它的运行器`;
+    this.showToast(message, 4200);
+    return message;
+  }
+
+  /** 第一次用某个功能时弹一次说明（用 localStorage 的 gad-box-hint-* 记住"已经提示过"） */
+  private showOnceHint(key: string, text: string): void {
+    const storageKey = `gad-box-hint-${key}`;
+    try {
+      if (window.localStorage.getItem(storageKey) === '1') return;
+      window.localStorage.setItem(storageKey, '1');
+    } catch {
+      // 存储不可用（隐私模式）：这一会话里只提示一次，不阻塞任何操作
+      if (this.shownHints.has(key)) return;
+      this.shownHints.add(key);
+    }
+    this.hintBanner.show(text, { icon: '💡', actionLabel: '知道了', autoHideMs: 9000 });
+  }
+
+  /** 本次会话里已经提示过的 key（存储不可用时的兜底，避免每帧弹一次） */
+  private readonly shownHints = new Set<string>();
+
   // ------------------------------------------------------------------ 运行
 
   start(): void {
@@ -5984,10 +7308,14 @@ export class Engine {
   dispose(): void {
     if (this.disposed) return;
     this.stop();
+    // M5 第 1 批：**第一件事**就是摘掉错误监听。它必须早于释放 canvas ——
+    // 否则'引擎已经 dispose、旧采集器还在收错误'，回调会去写已经拆掉的 UI
+    this.errorHandler.uninstall();
     this.disposed = true;
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('orientationchange', this.handleResize);
     document.removeEventListener('visibilitychange', this.handleVisibility);
+    document.removeEventListener('toggle', this.handlePanelToggled, true);
     this.toolbar.removeEventListener('click', this.handleToolbarClick);
     this.boxSelectElement.remove();
     this.brushUI.dispose();
@@ -5996,7 +7324,9 @@ export class Engine {
     this.placementUI.dispose();
     this.selectionUI.dispose();
     this.historyPanel.dispose();
-    this.shortcutHelp.dispose();
+    // M5 第 2 批：快捷键面板与主题都持有 window / matchMedia 级监听，必须显式摘
+    this.shortcuts.dispose();
+    this.themeSwitch.dispose();
     this.prefabPanel.dispose();
     // 问题 4/5：后加的浮层与 GPU 资源也要释放，否则引擎销毁后会留一堆 DOM 与 geometry
     this.loadingOverlay.dispose();
@@ -6023,6 +7353,14 @@ export class Engine {
     this.conflictOverlay.dispose();
     this.memoryPanel.dispose();
     this.tutorialUI.dispose();
+    // M5：帮助中心 / 面板管理 / 新手引导
+    // 面板管理要把自动生成的手柄与折叠按钮一起摘掉（它们是我们插进作者面板里的节点）
+    this.panelManager.dispose();
+    this.helpCenter.dispose();
+    this.onboarding.dispose();
+    for (const entry of this.onboardingListeners) entry.el.removeEventListener(entry.type, entry.listener);
+    this.onboardingListeners.length = 0;
+    this.clearOnboardingHighlight();
     this.framework.dispose();
     this.ui.dispose();
     this.input.dispose();
@@ -6149,6 +7487,9 @@ export class Engine {
     this.lastPanelMs = performance.now() - tPanels;
     // 补充 1：教学关卡（只在教学模式开着时推进，不做无谓计算）
     if (this.tutorial.active) this.tutorialUI.update(this.buildTutorialStats());
+    // M5 第 3 批：新手引导（不在引导中时这一句就是一次布尔判断）。
+    // 放在最后：引导的完成条件要读的是**这一帧结束时**的状态，早一帧读会看到"上一帧的世界"
+    this.updateOnboarding(delta * 1000);
     this.save.tick();
   };
 
@@ -6864,7 +8205,19 @@ export class Engine {
       y = cursor[1];
       z = cursor[2];
     }
-    const result = editor.apply(x, y, z, performance.now(), holding);
+    // M5 安全模式：粒子池到顶之后**直接不再生成**（清单里的 entry 说的就是这个）。
+    // 只对"加水"类工具关门：抽水 / 冻结 / 解冻跟粒子数无关，一起关掉会让安全模式下的
+    // 操作变得莫名其妙（"我的抽水按钮坏了"）
+    const addsParticles = editor.tool === 'pour' || editor.tool === 'add';
+    const allowed = !addsParticles || this.fluidEmissionHeadroom(Number.POSITIVE_INFINITY) > 0;
+    const result = editor.apply(x, y, z, performance.now(), holding && allowed);
+    if (result.spawned > 0 || result.removed > 0) {
+      // M5 引导：真的生成 / 移除了粒子才算"用过流体工具"
+      this.onboardingState.usedFluidTool = true;
+    }
+    if (!allowed && holding) {
+      this.showToast('安全模式：流体粒子已达上限（超出的粒子不会再生成）', 2000);
+    }
     if (result.message) {
       // 只在"真的做了事"时提示，而且是短提示：拖动时每秒会有十几次，
       // 弹一长串提示会盖住画面（这一点在物品面板上已经吃过一次教训）
@@ -6888,6 +8241,8 @@ export class Engine {
     const result = this.bundle.brush.apply(settings, hit, this.input.shift, cameraDirection);
     this.lastEditMs = result.ms;
     this.lastAffected = result.changed;
+    // M5 引导：真的改动过地形才算"改过地形"（点一下没改到东西不算，否则那一步会自己跳过）
+    if (result.changed > 0) this.onboardingState.editedTerrain = true;
   }
 
   // ------------------------------------------------------------------ 放置
@@ -6951,6 +8306,8 @@ export class Engine {
       this.haptics.play('place-fail');
       return;
     }
+    // M5 引导：放过一个建筑就算这一步做到了（失败的分支上面已经 return）
+    this.onboardingState.placedBuilding = true;
     this.haptics.play('place-ok');
 
     // 把堆叠信息写回实例（稳定性着色与调试面板都读它）
@@ -7629,226 +8986,325 @@ export class Engine {
       return;
     }
     this.controls.zoomBy(delta);
+    // M5 引导第 1 步：只有**真的在动相机**的滚轮才算（上面两个分支改的是笔刷参数与朝向）
+    this.onboardingState.movedCamera = true;
   }
 
   private handleKeyDown(code: string, ev: KeyboardEvent): void {
     this.controls.handleKeyDown(code);
+    // M5 引导第 1 步：键盘移动相机也算"动过视角"（键位与 GodCameraControls 保持一致）
+    if (CAMERA_MOVE_CODES.has(code)) this.onboardingState.movedCamera = true;
     void ev;
   }
 
+  /**
+   * 键盘快捷键分发（M5 第 2 批：改成按**动作 id** 分发）。
+   *
+   * 键位表的唯一真源是 `ShortcutPanel.DEFAULT_SHORTCUTS`（也就是快捷键面板里玩家能改的那张表），
+   * 这里只认它返回的动作 id —— 于是玩家在面板里把「撤销」改到别的键，引擎不需要改一行代码。
+   *
+   * 两条边界必须说清：
+   * 1. 未登记的键走 `handleUnboundShortcut()`。那一支保留的是**改键表表达不了**的东西：
+   *    地形工具下 1~9/0/-/= 被复用成 12 档笔刷模式，Backspace 与 Delete 一样是删除。
+   *    它们不是"忘了登记"，而是同一个物理键随工具切换语义 —— 写进默认表会让表自己和自己冲突
+   *    （见 DEFAULT_SHORTCUTS 的注释），所以只能留在引擎里按上下文判。
+   * 2. 按住 Ctrl/Meta 的组合键**不会**落进兜底分支：改键之前那段 ctrl 分支是"不在表里就 return"，
+   *    现在由兜底分支第一句的同一个判断保证（Ctrl+W 不该触发 W 的动作）。
+   */
   private handleShortcut(code: string, ev: KeyboardEvent): void {
-    const ctrl = ev.ctrlKey || ev.metaKey;
-
-    if (ctrl) {
-      switch (code) {
-        case 'KeyZ':
-          ev.preventDefault();
-          if (ev.shiftKey) this.redo();
-          else this.undo();
-          return;
-        case 'KeyY':
-          ev.preventDefault();
-          this.redo();
-          return;
-        case 'KeyS':
-          ev.preventDefault();
-          this.saveNow();
-          return;
-        case 'KeyO':
-          ev.preventDefault();
-          this.openFileDialog();
-          return;
-        case 'KeyD':
-          ev.preventDefault();
-          this.duplicateSelection();
-          return;
-        case 'KeyA':
-          ev.preventDefault();
-          this.selectAll();
-          return;
-        case 'KeyG':
-          ev.preventDefault();
-          if (ev.shiftKey) this.ungroupSelection();
-          else this.createGroup();
-          return;
-        case 'KeyP':
-          ev.preventDefault();
-          this.savePrefab();
-          return;
-        case 'KeyB':
-          ev.preventDefault();
-          this.exportBlueprint();
-          return;
-        case 'KeyM':
-          ev.preventDefault();
-          this.mirrorSelection('x');
-          return;
-        default:
-          return;
-      }
+    const action = this.shortcuts.match({
+      code,
+      // match() 的口径是把 metaKey 并进 ctrlKey（macOS 上 Cmd 就是 Ctrl 的位置）
+      ctrlKey: ev.ctrlKey || ev.metaKey,
+      shiftKey: ev.shiftKey,
+      altKey: ev.altKey,
+    });
+    if (!action) {
+      this.handleUnboundShortcut(code, ev);
+      return;
     }
+    // 玩家正在搜索框 / 输入框里打字时 match() 自己会返回 null，所以这里不必再判一次焦点
+    this.runShortcutAction(action, ev);
+  }
 
-    switch (code) {
-      case 'Tab':
-        // 问题 5：Tab 改成「切换主候选点」。
-        // M2 里 Tab 是切编辑/观察模式，但那个操作现在归 V —— 理由是候选切换是**高频**操作
-        // （放东西时一直在挑落点），而切模式是低频的，高频操作才配得上 Tab 这个最顺手的键。
-        // Shift+Tab 反向切。
-        ev.preventDefault();
-        this.cycleCandidate(ev.shiftKey ? -1 : 1);
+  /**
+   * 执行一个动作。
+   *
+   * 没有实现的动作（相机移动、按住 Shift 加速、F1 开合面板）**什么都不做** ——
+   * 它们分别由相机模块与 ShortcutPanel 自己处理，引擎这一层再执行一遍就会出现
+   * "移动速度翻倍""一次按键开+关"这类问题。
+   */
+  private runShortcutAction(action: string, ev: KeyboardEvent): void {
+    switch (action) {
+      // ---------------------------------------------------------------- 面板
+      case 'help':
+      case 'help-alt':
+        // F1 / ? 的开合由 ShortcutPanel 自己在 window 上处理（见它的 handleWindowKeyDown）。
+        // 这里是刻意的空分支：两边都做会一次按键开 + 关 = 看起来没反应。
         break;
-      // 组合面板用 K，教学用 J，物理面板用 F2 ——
-      // 这三个键都刻意避开了已占用的：P 是暂停、G 是吸附点对齐、B 是区块边界。
-      // （第一次实现时我用了 P 和 G，结果把「暂停」和「吸附」悄悄覆盖了；
-      //   这类冲突在 build 时只会给一句警告，跑起来就是功能失灵，所以键位必须查过再定。）
-      case 'KeyK':
+      case 'help-center':
+        this.toggleHelpPanel();
+        break;
+      case 'map-menu':
+        this.mapSelector.toggle();
+        break;
+      case 'combo-panel':
         this.comboPanel.toggle();
         break;
-      case 'KeyJ':
+      case 'tutorial':
         if (this.tutorial.active) this.tutorialExit();
         else this.startTutorial();
         break;
-      case 'F2':
+      case 'physics-panel':
         ev.preventDefault();
         document.getElementById('physics-debug-panel')?.classList.toggle('collapsed');
         break;
-      case 'KeyV':
+      case 'chunk-borders':
+        this.state.debug.chunkBorders = !this.state.debug.chunkBorders;
+        this.syncDebugSwitches();
+        break;
+      case 'rebuild-mesh':
+        this.rebuildAllMeshes();
+        break;
+      case 'wireframe':
+        this.state.debug.wireframe = !this.state.debug.wireframe;
+        this.syncDebugSwitches();
+        break;
+
+      // ---------------------------------------------------------------- 工具
+      case 'tool-terrain':
+      case 'tool-building':
+      case 'tool-select':
+      case 'tool-fluid':
+      case 'tool-sand': {
+        // ⚠ 数字键在**地形工具下复用成笔刷模式**（1~9 = 第 1~9 档），
+        // 而"切到某个工具"只在别的工具下生效 —— 改键之前就是这么分的，
+        // 所以这里按当前工具还原同一套判断（数字键的物理位置只有一个，语义有两个）
+        const index = TOOL_DIGIT_INDEX[action] ?? 0;
+        if (this.state.tool === 'terrain') {
+          this.brushUI.selectModeByIndex(index);
+          break;
+        }
+        this.setTool(TOOL_NAME_BY_ACTION[action] ?? 'terrain');
+        break;
+      }
+      case 'mode-toggle':
         ev.preventDefault();
         this.setMode(this.state.mode === 'edit' ? 'view' : 'edit');
         break;
-      case 'F1':
+      case 'snap-anchors':
+        this.state.placement.snapAnchors = !this.state.placement.snapAnchors;
+        this.refreshPlacement();
+        this.showToast(`吸附点对齐：${this.state.placement.snapAnchors ? '开' : '关'}`);
+        break;
+      case 'candidate-next':
+        // 问题 5：Tab 是「切换主候选点」。M2 里 Tab 是切编辑/观察模式，
+        // 但那个操作现在归 V —— 理由是候选切换是**高频**操作（放东西时一直在挑落点），
+        // 切模式是低频的，高频操作才配得上 Tab 这个最顺手的键。
         ev.preventDefault();
-        this.shortcutHelp.toggle();
+        this.cycleCandidate(1);
         break;
-      case 'Slash':
-        if (ev.shiftKey) {
-          ev.preventDefault();
-          this.shortcutHelp.toggle();
-        }
+      case 'candidate-prev':
+        ev.preventDefault();
+        this.cycleCandidate(-1);
         break;
-      case 'Enter':
+      case 'brush-shape-prev':
+        if (this.state.tool === 'building') this.cycleCandidate(-1);
+        else this.brushUI.cycleShape(-1);
+        break;
+      case 'brush-shape-next':
+        if (this.state.tool === 'building') this.cycleCandidate(1);
+        else this.brushUI.cycleShape(1);
+        break;
+      case 'confirm-placement':
         if (this.state.tool === 'building') this.confirmPlacement();
         break;
-      case 'Escape':
+      case 'cancel': {
         // M3 第 4 批：拖拽连线中按 Esc 先取消拖拽（最贴近玩家当下意图的那个动作优先）
         if (this.dragLink) {
           this.cancelLinkDrag();
           this.showToast('已取消拖拽连线', 1800);
           break;
         }
-        if (this.shortcutHelp.isOpen) this.shortcutHelp.close();
-        else if (this.mapSelector.isOpen) this.mapSelector.close();
+        // M5：快捷键面板自己也认 Esc（捕获态下它是"退出捕获"）。
+        // 面板开着时 Esc 只关面板，不再顺手清空选择 —— 玩家按 Esc 是想关掉挡着视线的面板
+        if (this.shortcuts.isOpen) {
+          this.shortcuts.close();
+          break;
+        }
+        if (this.mapSelector.isOpen) this.mapSelector.close();
         else if (this.quickStack.isActive) this.stopQuickStack();
         else if (this.pickup.isHolding) this.restorePickup();
         else if (this.state.tool === 'building') this.cancelPlacement();
         else this.clearSelection();
         break;
-      case 'Space':
+      }
+      case 'pickup':
         ev.preventDefault();
         if (this.pickup.isHolding) this.dropPickup();
         else this.beginPickup(false);
         break;
-      case 'KeyM':
-        this.mapSelector.toggle();
+
+      // ---------------------------------------------------------------- 相机
+      case 'cam-forward':
+      case 'cam-left':
+      case 'cam-back':
+      case 'cam-right':
+      case 'cam-boost':
+      case 'camera-reset':
+        // 相机移动 / 复位 / 按住 Shift 加速都由 GodCameraControls 的 onKeyDown 那条路做完了。
+        // 这里登记它们只是为了让快捷键面板能列出键位，引擎这一层不能再执行一遍
+        // （那样移动会变成两倍速，而且 F 复位会连着复位两次）
         break;
-      case 'KeyP':
-        this.time.togglePause();
-        break;
-      case 'KeyN':
-        this.time.requestStep(1);
-        break;
-      case 'KeyB':
-        if (ev.shiftKey) this.rebuildAllMeshes();
-        else {
-          this.state.debug.chunkBorders = !this.state.debug.chunkBorders;
-          this.syncDebugSwitches();
-        }
-        break;
-      case 'KeyG':
-        this.state.placement.snapAnchors = !this.state.placement.snapAnchors;
-        this.refreshPlacement();
-        this.showToast(`吸附点对齐：${this.state.placement.snapAnchors ? '开' : '关'}`);
-        break;
-      case 'Backquote':
-        this.state.debug.wireframe = !this.state.debug.wireframe;
-        this.syncDebugSwitches();
-        break;
-      case 'BracketLeft':
-        if (this.state.tool === 'building') this.cycleCandidate(-1);
-        else this.brushUI.cycleShape(-1);
-        break;
-      case 'BracketRight':
-        if (this.state.tool === 'building') this.cycleCandidate(1);
-        else this.brushUI.cycleShape(1);
-        break;
-      case 'KeyQ':
+      case 'cam-down':
+        // 建筑工具下 Q/E 兼作"旋转选中"（标签里写明了这一点）
         if (this.state.tool === 'building') this.rotateSelection(-this.state.build.rotationStep);
         break;
-      case 'KeyE':
+      case 'cam-up':
         if (this.state.tool === 'building') this.rotateSelection(this.state.build.rotationStep);
         break;
-      case 'Delete':
-      case 'Backspace':
+
+      // ---------------------------------------------------------------- 编辑
+      case 'undo':
+        ev.preventDefault();
+        this.undo();
+        break;
+      case 'redo':
+      case 'redo-alt':
+        ev.preventDefault();
+        this.redo();
+        break;
+      case 'save':
+        ev.preventDefault();
+        this.saveNow();
+        break;
+      case 'import':
+        ev.preventDefault();
+        this.openFileDialog();
+        break;
+      case 'duplicate':
+        ev.preventDefault();
+        this.duplicateSelection();
+        break;
+      case 'select-all':
+        ev.preventDefault();
+        this.selectAll();
+        break;
+      case 'group':
+        ev.preventDefault();
+        this.createGroup();
+        break;
+      case 'ungroup':
+        ev.preventDefault();
+        this.ungroupSelection();
+        break;
+      case 'prefab':
+        ev.preventDefault();
+        this.savePrefab();
+        break;
+      case 'blueprint':
+        ev.preventDefault();
+        this.exportBlueprint();
+        break;
+      case 'mirror':
+        ev.preventDefault();
+        this.mirrorSelection('x');
+        break;
+      case 'delete':
         this.deleteSelection();
         break;
-      case 'ArrowLeft':
+      // ⚠ 这里原有一条 `case 'regen-terrain'`（Ctrl+Shift+R）。接线时核对出来：
+      // 改键之前的那段 `if (ctrl)` 分支对 KeyR 直接 return，所以这个动作**从来没生效过**。
+      // 按"以引擎现有行为为准"的约定，绑定被从 DEFAULT_SHORTCUTS 里删掉（按键仍然什么都不做），
+      // 见那个文件里的说明 —— 接活它等于新增一个无确认的破坏性快捷键，不该在集成这一轮顺手做。
+      case 'nudge-left':
         ev.preventDefault();
         this.nudgeSelection('x', -1);
         break;
-      case 'ArrowRight':
+      case 'nudge-right':
         ev.preventDefault();
         this.nudgeSelection('x', 1);
         break;
-      case 'ArrowUp':
+      case 'nudge-up':
         ev.preventDefault();
-        if (ev.shiftKey) this.nudgeSelection('z', -1);
-        else this.nudgeSelection('y', 1);
+        this.nudgeSelection('y', 1);
         break;
-      case 'ArrowDown':
+      case 'nudge-down':
         ev.preventDefault();
-        if (ev.shiftKey) this.nudgeSelection('z', 1);
-        else this.nudgeSelection('y', -1);
+        this.nudgeSelection('y', -1);
         break;
-      case 'Comma':
+      case 'nudge-far':
+        ev.preventDefault();
+        this.nudgeSelection('z', -1);
+        break;
+      case 'nudge-near':
+        ev.preventDefault();
+        this.nudgeSelection('z', 1);
+        break;
+      case 'rotate-left':
         this.fineRotate('y', -1);
         break;
-      case 'Period':
+      case 'rotate-right':
         this.fineRotate('y', 1);
         break;
-      case 'KeyR':
-        // Ctrl+Shift+R = 重新生成地形（低频维护动作，和"重建网格"一起挪出常用键位）
-        if (this.input.ctrl && ev.shiftKey) {
-          ev.preventDefault();
-          this.regenerateTerrain();
-          break;
-        }
-        // M3：R 改成"回溯一帧"（Shift+R 前进一帧）。
-        // 原来的"重建全部网格"挪到 Shift+B —— 理由是回溯是玩家会**连续按**的操作，
-        // 而重建网格是低频维护动作，不该占着最顺手的键。
-        this.stepRewind(ev.shiftKey ? 1 : -1);
+
+      // ---------------------------------------------------------------- 时间
+      case 'pause':
+        this.time.togglePause();
         break;
+      case 'step':
+        this.time.requestStep(1);
+        break;
+      case 'rewind-back':
+        // M3：R 是"回溯一帧"（Shift+R 前进一帧）。原来的"重建全部网格"挪到 Shift+B ——
+        // 理由是回溯是玩家会**连续按**的操作，而重建网格是低频维护动作，不该占着最顺手的键。
+        this.stepRewind(-1);
+        break;
+      case 'rewind-forward':
+        this.stepRewind(1);
+        break;
+
       default:
-        if (this.state.tool === 'terrain') {
-          if (code.startsWith('Digit')) {
-            const index = Number(code.slice(5)) - 1;
-            if (index >= 0 && index < 9) this.brushUI.selectModeByIndex(index);
-          } else if (code === 'Digit0') {
-            this.brushUI.selectModeByIndex(9);
-          } else if (code === 'Minus') {
-            this.brushUI.selectModeByIndex(10);
-          } else if (code === 'Equal') {
-            this.brushUI.selectModeByIndex(11);
-          }
-          break;
-        }
-        if (code === 'Digit1') this.setTool('terrain');
-        else if (code === 'Digit2') this.setTool('building');
-        else if (code === 'Digit3') this.setTool('select');
-        else if (code === 'Digit4') this.setTool('fluid');
-        else if (code === 'Digit5') this.setTool('sand');
+        // 表里登记了、引擎还没实现的动作：只留一条日志，不抛异常也不静默假装做了
+        console.info(`[快捷键] 动作「${action}」在当前版本里没有对应实现`);
         break;
     }
   }
+
+  /**
+   * 键位表里没有登记的按键。
+   *
+   * 这一支保留的都不是"漏登记"，而是**同一个物理键随工具改变语义**的那几档：
+   * 地形工具下 1~9 已经是笔刷模式（登记成"切工具"会让默认表自己和自己冲突），
+   * 0 / - / = 是笔刷模式的第 10~12 档，Backspace 与 Delete 一样是删除。
+   * 另外按住 Ctrl/Meta 的组合键一律不动（与改键之前那段 ctrl 分支"不在表里就 return"一致）。
+   */
+  private handleUnboundShortcut(code: string, ev: KeyboardEvent): void {
+    if (ev.ctrlKey || ev.metaKey) return;
+    switch (code) {
+      case 'Backspace':
+        this.deleteSelection();
+        break;
+      case 'Digit0':
+        if (this.state.tool === 'terrain') this.brushUI.selectModeByIndex(9);
+        break;
+      case 'Minus':
+        if (this.state.tool === 'terrain') this.brushUI.selectModeByIndex(10);
+        break;
+      case 'Equal':
+        if (this.state.tool === 'terrain') this.brushUI.selectModeByIndex(11);
+        break;
+      default:
+        // 地形工具下数字键是笔刷模式（1~9）。玩家若把「切到地形笔刷」改到别的键，
+        // 默认表里就没有 1~9 的绑定了 —— 那时它们仍该当笔刷模式用，而不是整排失效
+        if (this.state.tool === 'terrain' && code.startsWith('Digit')) {
+          const index = Number(code.slice(5)) - 1;
+          if (index >= 0 && index < 9) this.brushUI.selectModeByIndex(index);
+        }
+        break;
+    }
+  }
+
 
   private openFileDialog(): void {
     const input = document.getElementById('file-input') as HTMLInputElement | null;
@@ -7877,7 +9333,12 @@ export class Engine {
         this.mapSelector.open();
         break;
       case 'shortcuts':
-        this.shortcutHelp.toggle();
+        // M5 第 2 批：换成可自定义的快捷键面板（旧的只读速查表已经下线）
+        this.shortcuts.toggle();
+        break;
+      case 'help':
+        // M5 第 3 批：帮助中心（工具栏的 ❓ 与 H 键走同一条路）
+        this.toggleHelpPanel();
         break;
       case 'undo':
         this.undo();
@@ -7965,12 +9426,37 @@ export class Engine {
 
   private saveNow(): void {
     const result = this.save.saveToStorage();
+    // M5 引导：只有真的存成功了才算"存过一次"（失败时不该把这一步划掉）
+    if (result.ok) this.onboardingState.savedOnce = true;
     this.showToast(result.message);
     this.warnAboutUnsavedPhysics();
   }
 
+  /**
+   * 读取本地存档（工具栏的 📂 走这里）。
+   *
+   * M5 第 1 批：读档失败分两种，**处理方式完全不同** ——
+   * - "存档坏了（JSON 解析不过）"：进安全模式，并在**失败这一刻**把现场留一份副本
+   *   （`lastCorruptExport`）。之后再点「导出损坏存档」时，本地存储里那份坏数据
+   *   可能已经被自动保存覆盖掉了，所以现场必须当场留；
+   * - "没有存档 / 存储读不出来"：只是提示一句 —— 这两种情况里安全模式帮不上忙，
+   *   进去了反而会平白关掉画质。
+   */
   private loadFromStorage(): void {
-    this.showToast(this.save.loadFromStorage().message);
+    const corrupt = this.detectCorruptSave();
+    const result = this.save.loadFromStorage();
+    this.showToast(result.message);
+    if (!corrupt) return;
+    this.lastCorruptExport = buildCorruptSaveExport({
+      key: SAVE_CONFIG.storageKey,
+      raw: corrupt.raw,
+      parseError: corrupt.parseError,
+    });
+    this.errorHandler.capture('读档失败（存档损坏）', new Error(corrupt.parseError));
+    this.enterSafeMode(
+      'save-corrupt',
+      '本地存档 JSON 解析失败；坏掉的原数据已经留了一份副本（「导出损坏存档」可以导出）',
+    );
   }
 
   /**
@@ -8002,7 +9488,15 @@ export class Engine {
     this.showToast((await this.save.importFromFile(file)).message);
   }
 
-  private regenerateTerrain(): void {
+  /**
+   * 按同一种子重新生成整个地形。
+   *
+   * ⚠ 目前**没有任何键位或按钮**会调用它：`Ctrl+Shift+R` 在改键之前就是失效的
+   * （见 runShortcutAction 里那段说明），接线时按"以引擎现有行为为准"把那条绑定删掉了。
+   * 所以留成公开方法而不是删掉代码：它是浏览器控制台（`engine.regenerateTerrain()`）
+   * 与将来菜单入口的落点，删除它等于顺手砍掉一个功能。
+   */
+  regenerateTerrain(): void {
     const preset = getWorldSize(this.bundle.world.sizeId);
     TerrainGenerator.generate(this.bundle.grid, {
       seed: this.bundle.world.seed,
@@ -8340,8 +9834,7 @@ function firstGroupId(groups: GroupSystem, ids: readonly number[]): string | nul
  * 优先用 `navigator.clipboard`，失败时**如实返回 false**（不抛异常）——
  * 它需要安全上下文（https 或 localhost），而 GitHub Pages 是 https 所以线上没问题，
  * 但局域网里用 IP 访问时会被拒。
- */
-async function copyToClipboard(text: string): Promise<boolean> {
+ */async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return false;
     await navigator.clipboard.writeText(text);
@@ -8368,4 +9861,51 @@ function worstPhaseOf(phases: Record<string, number> | undefined): string {
     }
   }
   return worst === '' ? '未知' : `${phaseLabel(worst)} ${worstMs.toFixed(1)}ms`;
+}
+
+/**
+ * 时刻 → `时:分:秒`（错误面板上每一条前面要能看出"这是什么时候出的"）。
+ *
+ * 只显示时间不显示日期：错误面板看的是"刚刚这一串错误是不是同一时刻爆的"，
+ * 完整的时间戳（导出的报告里是毫秒数 + ISO 串）留给需要对照日历的场合。
+ */
+function formatClock(atMs: number): string {
+  const date = new Date(atMs);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/**
+ * 触发浏览器下载一段文本。
+ *
+ * Node / 无 DOM 环境下**如实返回失败**，绝不假装成功（"点了导出但什么都没下载下来"
+ * 比报错更让人摸不着头脑）。做法与 `CorruptSaveExport.downloadCorruptSaveExport`
+ * 和 `SaveSystem.exportToFile` 一致：Blob + a[download]，延迟 revoke。
+ */
+function downloadTextFile(name: string, text: string, mime: string): { ok: boolean; message: string } {
+  if (
+    typeof document === 'undefined' ||
+    typeof Blob === 'undefined' ||
+    typeof URL === 'undefined' ||
+    typeof URL.createObjectURL !== 'function'
+  ) {
+    return {
+      ok: false,
+      message: '当前环境没有 document / Blob / URL.createObjectURL，无法下载：报告已经打印在控制台里（可手动复制）',
+    };
+  }
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // 立刻 revoke 会让部分浏览器来不及开始下载，所以延迟一下
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return { ok: true, message: `已导出 ${name}` };
+  } catch (error) {
+    return { ok: false, message: `导出失败：${error instanceof Error ? error.message : String(error)}` };
+  }
 }

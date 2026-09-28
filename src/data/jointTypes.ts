@@ -26,7 +26,14 @@ export interface JointConfig {
   type: JointType;
   /** 主动体：组合模板里是 objects 下标，运行时是实例 id */
   bodyA: string;
-  /** 从动体：同上；空字符串表示连到"世界"（静态参考系） */
+  /**
+   * 从动体：同上；空字符串表示连到"世界"（静态参考系）。
+   *
+   * 兼容说明：`bodyA` 也**允许**为空串表示世界（组合数据里历史上就有 8 处这么写，
+   * 见 `combos.ts` 的 `door_kit` / `gear_train` / `elevator` 等）。`JointSystem.add()`
+   * 会把这种写法归一化成"世界在 B 侧"，因为锚点是**世界坐标**、两侧各自算局部偏移，
+   * 互换不改变语义。新写的配置请仍然把实体放在 `bodyA`，把世界留在 `bodyB`。
+   */
   bodyB: string;
   /** 关节锚点（世界坐标；模板里是相对组合原点的偏移） */
   anchor: [number, number, number];
